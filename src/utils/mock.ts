@@ -9,6 +9,8 @@ import {
   Attachment,
   SignOffNode,
   ArchiveChecklistItem,
+  RectificationTask,
+  SignOffRole,
 } from '../types';
 import { getCurrentTime } from './date';
 import { addDays, formatISO } from 'date-fns';
@@ -645,4 +647,109 @@ export function generateMockArchiveChecklist(formId: string): ArchiveChecklistIt
       checked: false,
     },
   ];
+}
+
+export function generateMockRectificationTasks(formId: string): RectificationTask[] {
+  const now = new Date();
+  const employees = generateMockEmployees();
+  const hrUser = employees.find(e => e.role === 'hr')!;
+  
+  const categoryRoleMap: Record<string, SignOffRole> = {
+    document: 'supervisor',
+    asset: 'admin',
+    finance: 'finance',
+    system: 'it',
+    hr: 'hr',
+  };
+
+  const tasks: RectificationTask[] = [
+    {
+      id: 'rect-' + generateId(),
+      formId,
+      source: 'precheck_unsigned',
+      sourceDescription: 'IT管理员未完成签收',
+      category: 'signoff',
+      assigneeRole: 'it',
+      title: '完成IT管理员签收确认',
+      description: '请确认所有设备归还、权限关闭后完成签收',
+      status: 'pending',
+      priority: 'high',
+      riskLevel: 'high',
+      createdAt: formatISO(now),
+      createdBy: hrUser.id,
+      dueDate: formatISO(addDays(now, 3)).split('T')[0],
+      hasException: false,
+    },
+    {
+      id: 'rect-' + generateId(),
+      formId,
+      source: 'precheck_unsigned',
+      sourceDescription: '行政人员未完成签收',
+      category: 'signoff',
+      assigneeRole: 'admin',
+      title: '完成行政人员签收确认',
+      description: '请确认门禁卡、工牌等物品归还后完成签收',
+      status: 'pending',
+      priority: 'medium',
+      riskLevel: 'medium',
+      createdAt: formatISO(now),
+      createdBy: hrUser.id,
+      dueDate: formatISO(addDays(now, 3)).split('T')[0],
+      hasException: false,
+    },
+    {
+      id: 'rect-' + generateId(),
+      formId,
+      source: 'precheck_unchecked',
+      sourceDescription: '知识库内容已移交未核验',
+      category: 'checklist',
+      assigneeRole: categoryRoleMap['document'],
+      title: '核验知识库内容移交',
+      description: '请确认知识库内容已完整移交',
+      status: 'pending',
+      priority: 'medium',
+      riskLevel: 'medium',
+      createdAt: formatISO(now),
+      createdBy: hrUser.id,
+      dueDate: formatISO(addDays(now, 5)).split('T')[0],
+      hasException: false,
+    },
+    {
+      id: 'rect-' + generateId(),
+      formId,
+      source: 'precheck_unchecked',
+      sourceDescription: '笔记本电脑已归还未核验',
+      category: 'checklist',
+      assigneeRole: categoryRoleMap['asset'],
+      title: '核验笔记本电脑归还',
+      description: '请确认笔记本电脑已归还并检查完好情况',
+      status: 'pending',
+      priority: 'high',
+      riskLevel: 'high',
+      createdAt: formatISO(now),
+      createdBy: hrUser.id,
+      dueDate: formatISO(addDays(now, 2)).split('T')[0],
+      hasException: false,
+    },
+    {
+      id: 'rect-' + generateId(),
+      formId,
+      source: 'quality_deduction',
+      sourceDescription: '3个未完成交接任务，扣15分',
+      category: 'quality',
+      assigneeRole: 'supervisor',
+      title: '完成剩余交接任务',
+      description: '交接任务进度影响归档质量评分，请尽快完成',
+      status: 'pending',
+      priority: 'high',
+      riskLevel: 'high',
+      qualityScoreImpact: 15,
+      createdAt: formatISO(now),
+      createdBy: hrUser.id,
+      dueDate: formatISO(addDays(now, 3)).split('T')[0],
+      hasException: false,
+    },
+  ];
+
+  return tasks;
 }

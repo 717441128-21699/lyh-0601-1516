@@ -12,7 +12,8 @@ import type {
   Attachment,
   AuditLog,
   SignOffNode,
-  ArchiveChecklistItem
+  ArchiveChecklistItem,
+  RectificationTask
 } from '../types';
 import { formatDate } from './date';
 
@@ -32,6 +33,15 @@ interface StoreState {
   archiveExceptionNotes?: string;
   qualityScore?: { score: number; riskLevel: string; deductions: { module: string; reason: string; points: number }[] };
   precheckIssues?: { unsignedRoles: string[]; uncheckedItems: string[]; missingAttachments: string[]; emptyKeyFields: string[] };
+  rectificationTasks?: RectificationTask[];
+  auditFilter?: {
+    riskLevel?: string;
+    module?: string;
+    role?: string;
+    startDate?: string;
+    endDate?: string;
+    keyword?: string;
+  };
 }
 
 export async function exportToPDF(elementId: string, filename: string): Promise<void> {
@@ -57,7 +67,7 @@ export async function exportToPDF(elementId: string, filename: string): Promise<
   pdf.save(filename.endsWith('.pdf') ? filename : `${filename}.pdf`);
 }
 
-export function exportToExcel(data: any[], filename: string, sheetName: string = 'Sheet1'): void {
+export function exportToExcel(data: Record<string, unknown>[], filename: string, sheetName: string = 'Sheet1'): void {
   const worksheet = XLSX.utils.json_to_sheet(data);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
@@ -69,6 +79,156 @@ export function exportCompletePackage(store: StoreState): void {
   const employeeName = store.employees.find(e => e.id === store.resignationForm?.employeeId)?.name || '员工';
   const now = new Date();
   const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+
+  const rectificationTasks = store.rectificationTasks || [];
+  const totalDeductions = store.qualityScore?.deductions?.reduce((sum, d) => sum + d.points, 0) || 0;
+  const qualityScore = store.qualityScore?.score ?? 100 - totalDeductions;
+  const totalTasks = rectificationTasks.length;
+  const completedTasks = rectificationTasks.filter(t => t.status === 'completed').length;
+  const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+  const hasException = rectificationTasks.some(t => t.hasException) || !!store.archiveExceptionNotes;
+
+  const summaryData: Record<string, unknown>[] = [];
+
+  if (store.auditFilter) {
+    const { riskLevel, module, role, startDate, endDate, keyword } = store.auditFilter;
+    summaryData.push({ '项目': '当前筛选条件', '内容': '' });
+    if (riskLevel) summaryData.push({ '项目': '风险等级', '内容': getRiskLevelText(riskLevel) });
+    if (module) summaryData.push({ '项目': '模块', '内容': getModuleText(module) });
+    if (role) summaryData.push({ '项目': '角色', '内容': getRoleText(role) });
+    if (startDate || endDate) {
+      const dateRange = [startDate, endDate].filter(Boolean).join(' 至 ');
+      summaryData.push({ '项目': '时间范围', '内容': dateRange });
+    }
+    if (keyword) summaryData.push({ '项目': '关键字', '内容': keyword });
+    summaryData.push({ '项目': '', '内容': '' });
+  }
+
+  summaryData.push({ '项目': '归档质量分', '内容': `${qualityScore}分` });
+  summaryData.push({ '项目': '风险等级', '内容': getRiskLevelText(store.qualityScore?.riskLevel || 'low') });
+  summaryData.push({ '项目': '总扣分数', '内容': `${totalDeductions}分` });
+  summaryData.push({ '项目': '扣分项数量', '内容': `${store.qualityScore?.deductions?.length || 0}项` });
+  summaryData.push({ '项目': '例外归档', '内容': hasException ? '是' : '否' });
+  summaryData.push({ '项目': '例外说明', '内容': store.archiveExceptionNotes || (rectificationTasks.find(t => t.hasException)?.exceptionNotes) || '' });
+  summaryData.push({ '项目': '待整改任务数', '内容': `${totalTasks - completedTasks}项` });
+  summaryData.push({ '项目': '已完成整改数', '内容': `${completedTasks}项` });
+  summaryData.push({ '项目': '整改完成率', '内容': `${completionRate}%` });
+  summaryData.push({ '项目': '导出时间', '内容': formatDate(now.toISOString(), 'yyyy-MM-dd HH:mm:ss') });
+  summaryData.push({ '项目': '导出人', '内容': store.currentUser?.name || '' });
+  summaryData.push({ '项目': '', '内容': '' });
+  summaryData.push({ '项目': '整改任务统计', '内容': '' });
+  summaryData.push({ '项目': '风险等级', '内容': '数量', '占比': '占比' });
+
+  const riskStats = { critical: 0, high: 0, medium: 0, low: 0 };
+  rectificationTasks.forEach(t => {
+    const level = t.riskLevel || 'low';
+    if (riskStats[level as keyof typeof riskStats] !== undefined) {
+      riskStats[level as keyof typeof riskStats]++;
+    }
+  });
+
+  const riskOrder = ['critical', 'high', 'medium', 'low'] as const;
+  riskOrder.forEach(level => {
+    const count = riskStats[level];
+    const percentage = totalTasks > 0 ? Math.round((count / totalTasks) * 100) : 0;
+    summaryData.push({ '项目': getRiskLevelText(level), '内容': count, '占比': `${percentage}%` });
+  });
+
+  summaryData.push({ '项目': '', '内容': '' });
+  summaryData.push({ '项目': '整改任务列表摘要', '内容': '' });
+  summaryData.push({
+    '项目': '任务标题',
+    '内容': '责任角色',
+    '整改分类': '整改分类',
+    '来源': '来源',
+    '状态': '状态',
+    '优先级': '优先级',
+    '风险等级': '风险等级',
+    '创建时间': '创建时间',
+    '完成时间': '完成时间',
+    '质量影响': '质量影响'
+  });
+
+  if (rectificationTasks.length > 0) {
+    rectificationTasks.forEach(task => {
+      summaryData.push({
+        '项目': task.title,
+        '内容': getRoleText(task.assigneeRole),
+        '整改分类': getRectificationCategoryText(task.category),
+        '来源': getRectificationSourceText(task.source),
+        '状态': getRectificationStatusText(task.status),
+        '优先级': getRectificationPriorityText(task.priority),
+        '风险等级': getRiskLevelText(task.riskLevel || 'low'),
+        '创建时间': formatDate(task.createdAt, 'yyyy-MM-dd HH:mm'),
+        '完成时间': task.completedAt ? formatDate(task.completedAt, 'yyyy-MM-dd HH:mm') : '',
+        '质量影响': task.qualityScoreImpact !== undefined ? `${task.qualityScoreImpact}分` : ''
+      });
+    });
+  } else {
+    summaryData.push({
+      '项目': '',
+      '内容': '',
+      '整改分类': '',
+      '来源': '',
+      '状态': '',
+      '优先级': '',
+      '风险等级': '',
+      '创建时间': '',
+      '完成时间': '',
+      '质量影响': ''
+    });
+  }
+
+  const summarySheet = XLSX.utils.json_to_sheet(summaryData);
+  XLSX.utils.book_append_sheet(workbook, summarySheet, '归档审计摘要');
+
+  const rectificationHistoryData: Record<string, unknown>[] = [{
+    '任务ID': '任务ID',
+    '任务标题': '任务标题',
+    '创建前质量分': '创建前质量分',
+    '创建后质量分': '创建后质量分',
+    '整改完成后质量分': '整改完成后质量分',
+    '整改说明': '整改说明',
+    '创建人': '创建人',
+    '创建时间': '创建时间',
+    '完成人': '完成人',
+    '完成时间': '完成时间'
+  }];
+
+  if (rectificationTasks.length > 0) {
+    const initialScore = 100;
+    let runningScore = initialScore;
+
+    const sortedTasks = [...rectificationTasks].sort((a, b) =>
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+
+    sortedTasks.forEach(task => {
+      const scoreBefore = runningScore;
+      const scoreImpact = task.qualityScoreImpact || 0;
+      const scoreAfterCreation = scoreBefore - scoreImpact;
+      runningScore = scoreAfterCreation;
+
+      const creator = store.employees.find(e => e.id === task.createdBy);
+      const completer = task.completedBy ? store.employees.find(e => e.id === task.completedBy) : null;
+
+      rectificationHistoryData.push({
+        '任务ID': task.id,
+        '任务标题': task.title,
+        '创建前质量分': scoreBefore,
+        '创建后质量分': scoreAfterCreation,
+        '整改完成后质量分': task.status === 'completed' ? qualityScore : '',
+        '整改说明': task.completionNotes || '',
+        '创建人': creator?.name || task.createdBy,
+        '创建时间': formatDate(task.createdAt, 'yyyy-MM-dd HH:mm'),
+        '完成人': completer?.name || (task.completedBy || ''),
+        '完成时间': task.completedAt ? formatDate(task.completedAt, 'yyyy-MM-dd HH:mm') : ''
+      });
+    });
+  }
+
+  const historySheet = XLSX.utils.json_to_sheet(rectificationHistoryData);
+  XLSX.utils.book_append_sheet(workbook, historySheet, '整改前后记录');
 
   if (store.resignationForm) {
     const employee = store.employees.find(e => e.id === store.resignationForm!.employeeId);
@@ -280,14 +440,14 @@ export function exportCompletePackage(store: StoreState): void {
   XLSX.utils.book_append_sheet(workbook, signOffSheet, '多角色签收');
 
   const checklistData = store.archiveChecklist.map(item => {
-    const checkedBy = item.checkedBy ? store.employees.find(e => e.id === item.checkedBy) : null;
+    const checkedBy = item.checked && item.checkedBy ? store.employees.find(e => e.id === item.checkedBy) : null;
     return {
       '分类': getChecklistCategoryText(item.category),
       '核验项': item.title,
       '是否核验': item.checked ? '是' : '否',
-      '核验人': checkedBy?.name || '',
-      '核验时间': item.checkedAt ? formatDate(item.checkedAt, 'yyyy-MM-dd HH:mm') : '',
-      '备注': item.notes || '',
+      '核验人': item.checked ? (checkedBy?.name || '') : '',
+      '核验时间': item.checked ? (item.checkedAt ? formatDate(item.checkedAt, 'yyyy-MM-dd HH:mm') : '') : '',
+      '备注': item.checked ? (item.notes || '') : '',
     };
   });
   const checklistSheet = XLSX.utils.json_to_sheet(checklistData.length > 0 ? checklistData : [{
@@ -302,7 +462,7 @@ export function exportCompletePackage(store: StoreState): void {
 
   if (store.qualityScore) {
     const { score, riskLevel, deductions } = store.qualityScore;
-    const qualityData: any[] = [
+    const qualityData: Record<string, unknown>[] = [
       { '指标': '质量分数', '内容': score },
       { '指标': '风险等级', '内容': riskLevel }
     ];
@@ -330,7 +490,7 @@ export function exportCompletePackage(store: StoreState): void {
   XLSX.writeFile(workbook, `${employeeName}_离职交接完整档案_${timestamp}.xlsx`);
 }
 
-export function exportAllData(store: any): void {
+export function exportAllData(store: StoreState): void {
   exportCompletePackage(store);
 }
 
@@ -477,4 +637,55 @@ function getChecklistCategoryText(category: string): string {
     hr: '人事手续',
   };
   return map[category] || category;
+}
+
+function getRectificationStatusText(status: string): string {
+  const map: Record<string, string> = {
+    pending: '待处理',
+    in_progress: '进行中',
+    completed: '已完成',
+    cancelled: '已取消',
+  };
+  return map[status] || status;
+}
+
+function getRectificationPriorityText(priority: string): string {
+  const map: Record<string, string> = {
+    high: '高',
+    medium: '中',
+    low: '低',
+  };
+  return map[priority] || priority;
+}
+
+function getRiskLevelText(level: string): string {
+  const map: Record<string, string> = {
+    critical: '严重风险',
+    high: '高风险',
+    medium: '中风险',
+    low: '低风险',
+  };
+  return map[level] || level;
+}
+
+function getRectificationCategoryText(category: string): string {
+  const map: Record<string, string> = {
+    signoff: '签收',
+    checklist: '核验清单',
+    attachment: '附件',
+    field: '字段',
+    quality: '质量',
+  };
+  return map[category] || category;
+}
+
+function getRectificationSourceText(source: string): string {
+  const map: Record<string, string> = {
+    precheck_unsigned: '预检查-未签收',
+    precheck_unchecked: '预检查-未核验',
+    precheck_missing: '预检查-缺失',
+    quality_deduction: '质量扣分',
+    manual: '手动创建',
+  };
+  return map[source] || source;
 }

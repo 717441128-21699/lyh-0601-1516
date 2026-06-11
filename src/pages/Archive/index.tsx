@@ -35,7 +35,8 @@ import {
   Filter,
   FileOutput,
   ChevronDown,
-  Search
+  Search,
+  Wrench
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import StatusBadge from '@/components/StatusBadge';
@@ -182,6 +183,7 @@ export default function ArchivePage() {
   const [auditEndDate, setAuditEndDate] = useState('');
   const [auditKeywordFilter, setAuditKeywordFilter] = useState('');
   const [exceptionNotesInput, setExceptionNotesInput] = useState('');
+  const [creatingRectifications, setCreatingRectifications] = useState(false);
 
   const {
     resignationForm,
@@ -209,7 +211,8 @@ export default function ArchivePage() {
     getArchiveQualityScore,
     archiveExceptionNotes,
     setArchiveExceptionNotes,
-    getArchivePrecheckIssues
+    getArchivePrecheckIssues,
+    createRectificationTasks
   } = useStore();
 
   const overallProgress = getOverallProgress();
@@ -362,6 +365,8 @@ export default function ArchivePage() {
   };
 
   const filteredAuditLogs = useMemo(() => {
+    const keyword = auditKeywordFilter.trim().toLowerCase();
+    
     return auditLogs.filter((log: AuditLog) => {
       if (auditModuleFilter !== 'all' && log.module !== auditModuleFilter) {
         return false;
@@ -370,28 +375,28 @@ export default function ArchivePage() {
         return false;
       }
       if (auditStartDate) {
-        const logDate = new Date(log.timestamp).toISOString().split('T')[0];
+        const logDate = log.timestamp.split('T')[0];
         if (logDate < auditStartDate) {
           return false;
         }
       }
       if (auditEndDate) {
-        const logDate = new Date(log.timestamp).toISOString().split('T')[0];
+        const logDate = log.timestamp.split('T')[0];
         if (logDate > auditEndDate) {
           return false;
         }
       }
-      if (auditKeywordFilter) {
-        const keyword = auditKeywordFilter.toLowerCase();
-        const detailsMatch = log.details?.toLowerCase().includes(keyword);
-        const commentsMatch = comments.some((c: Comment) => 
-          c.content?.toLowerCase().includes(keyword)
-        );
-        if (!detailsMatch && !commentsMatch) {
-          return false;
-        }
-      }
-      return true;
+      const detailsMatch = keyword ? log.details.toLowerCase().includes(keyword) : true;
+      
+      const commentMatch = keyword
+        ? comments.some((c: Comment) => {
+            const contentMatch = c.content.toLowerCase().includes(keyword);
+            const categoryMatch = log.module === c.category || log.module === 'general';
+            return contentMatch && categoryMatch;
+          })
+        : true;
+      
+      return detailsMatch || commentMatch;
     });
   }, [auditLogs, auditModuleFilter, auditOperatorFilter, auditStartDate, auditEndDate, auditKeywordFilter, comments]);
 
@@ -463,6 +468,41 @@ export default function ArchivePage() {
     archiveResignation();
     setConfirmDialogOpen(false);
     setExceptionNotesInput('');
+  };
+
+  const handleCreateRectificationTasks = async () => {
+    setCreatingRectifications(true);
+    try {
+      const uncheckedItems = archiveChecklist
+        .filter(item => !item.checked)
+        .map(item => ({
+          id: item.id,
+          title: item.title,
+          category: item.category
+        }));
+
+      const issues = {
+        unsignedRoles: precheckIssues.unsignedRoles || [],
+        uncheckedItems,
+        missingAttachments: precheckIssues.missingAttachments || [],
+        emptyKeyFields: precheckIssues.emptyKeyFields || [],
+        qualityDeductions: qualityScore.deductions,
+        exceptionNotes: exceptionNotesInput.trim() || undefined
+      };
+
+      const tasks = createRectificationTasks(issues);
+      const totalCount = tasks.length;
+      
+      alert(`已生成 ${totalCount} 条整改任务`);
+      
+      setConfirmDialogOpen(false);
+      setExceptionNotesInput('');
+    } catch (error) {
+      console.error('生成整改任务失败:', error);
+      alert('生成整改任务失败，请重试');
+    } finally {
+      setCreatingRectifications(false);
+    }
   };
 
   const handleOpenPrecheckDialog = () => {
@@ -543,6 +583,16 @@ export default function ArchivePage() {
 
     const fileName = `审计明细_${formatDate(new Date(), 'yyyyMMdd')}.xlsx`;
     XLSX.writeFile(wb, fileName);
+  };
+
+  const handleKeywordKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+    }
+  };
+
+  const clearKeywordFilter = () => {
+    setAuditKeywordFilter('');
   };
 
   return (
@@ -1358,15 +1408,24 @@ export default function ArchivePage() {
                           type="text"
                           value={auditKeywordFilter}
                           onChange={(e) => setAuditKeywordFilter(e.target.value)}
+                          onKeyDown={handleKeywordKeyDown}
                           placeholder="搜索操作详情或意见内容..."
-                          className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-200 bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                          className="w-full pl-9 pr-9 py-2 text-sm rounded-lg border border-gray-200 bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                         />
+                        {auditKeywordFilter && (
+                          <button
+                            onClick={clearKeywordFilter}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-100 rounded"
+                          >
+                            <X className="w-3.5 h-3.5 text-gray-400" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200">
                     <span className="text-sm text-gray-600">
-                      筛选结果: 共 {filteredAuditLogs.length} 条记录
+                      共找到 {filteredAuditLogs.length} 条记录
                     </span>
                     <button
                       onClick={handleExportAuditLogs}
@@ -1439,487 +1498,208 @@ export default function ArchivePage() {
           </div>
         </div>
 
-        <div className={cn(
-          'rounded-xl border shadow-sm p-5',
-          uncompletedModules.length === 0
-            ? 'bg-green-50 border-green-200'
-            : 'bg-orange-50 border-orange-200'
-        )}>
-          <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <FolderOpen className="w-5 h-5 text-gray-500" />
-            导出前预览
-          </h3>
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              {uncompletedModules.length === 0 ? (
-                <CheckCircle2 className="w-5 h-5 text-green-600" />
-              ) : (
-                <AlertTriangle className="w-5 h-5 text-orange-600" />
+        <div className="sticky bottom-0 bg-white border-t border-gray-200 p-4 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleExportPDF}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              导出PDF
+            </button>
+            <button
+              onClick={handleExportCompletePackage}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <FileDown className="w-4 h-4" />
+              导出完整档案
+            </button>
+          </div>
+          {isHR && !isArchived && (
+            <div className="flex items-center gap-3">
+              {precheckIssues.hasIssues && (
+                <button
+                  onClick={handleCreateRectificationTasks}
+                  disabled={creatingRectifications}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-orange-700 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Wrench className="w-4 h-4" />
+                  {creatingRectifications ? '生成中...' : '一键生成整改任务'}
+                </button>
               )}
-              <span className={cn(
-                'text-sm font-medium',
-                uncompletedModules.length === 0 ? 'text-green-800' : 'text-orange-800'
-              )}>
-                {uncompletedModules.length === 0
-                  ? '所有模块已完成，可以导出完整交接包'
-                  : `还有 ${uncompletedModules.length} 个模块未完成`}
-              </span>
-            </div>
-            {uncompletedModules.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {uncompletedModules.map((module) => (
-                  <span
-                    key={module}
-                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-700 border border-orange-200"
-                  >
-                    <XCircle className="w-3 h-3 mr-1" />
-                    {module}
-                  </span>
-                ))}
-              </div>
-            )}
-            {uncompletedModules.length === 0 && (
-              <div className="flex flex-wrap gap-2">
-                {['离职单', '交接任务', '资产归还', '权限关闭', '结算确认', '多角色签收', '归档核验'].map((module) => (
-                  <span
-                    key={module}
-                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700 border border-green-200"
-                  >
-                    <Check className="w-3 h-3 mr-1" />
-                    {module}
-                  </span>
-                ))}
-              </div>
-            )}
-            <p className="text-xs text-gray-600 mt-2">
-              完整交接包包含：离职单、交接任务、资产归还、权限关闭、财务结算、附件清单、流程记录、意见留痕、多角色签收、归档核验清单，共10个Sheet
-            </p>
-            {qualityScore.score < 80 && (
-              <div className={cn(
-                'mt-3 p-3 rounded-lg border',
-                riskLevelColors[riskLevel]
-              )}>
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className={cn('w-4 h-4', scoreNumberColors[riskLevel])} />
-                  <span className={cn('text-sm font-medium', scoreNumberColors[riskLevel])}>
-                    归档质量评分: {qualityScore.score} 分（{riskLevelLabels[riskLevel]}），建议检查扣分项后再导出
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className={cn(
-          'rounded-xl border shadow-sm p-5',
-          riskLevelColors[riskLevel]
-        )}>
-          <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Shield className="w-5 h-5 text-gray-500" />
-            归档质量评分
-          </h3>
-          <div className="flex flex-col lg:flex-row gap-6">
-            <div className="flex-shrink-0 flex flex-col items-center justify-center lg:w-48 p-4 rounded-xl bg-white/60 border border-white/80">
-              <div className={cn(
-                'text-6xl font-bold mb-2',
-                scoreNumberColors[riskLevel]
-              )}>
-                {qualityScore.score}
-              </div>
-              <span className={cn(
-                'inline-flex items-center px-3 py-1 rounded-full text-xs font-medium',
-                riskLabelColors[riskLevel]
-              )}>
-                {riskLevelLabels[riskLevel]}
-              </span>
-              <p className="text-xs text-gray-500 mt-3 text-center">
-                满分100分
-              </p>
-            </div>
-            <div className="flex-1 space-y-4">
-              {(qualityScore.deductions.length > 0 || qualityScore.missingFields.length > 0) ? (
-                <>
-                  {qualityScore.deductions.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
-                        <AlertCircle className="w-4 h-4 text-orange-500" />
-                        扣分项明细
-                      </h4>
-                      <div className="space-y-2">
-                        {qualityScore.deductions.map((deduction, index) => (
-                          <div key={index} className="flex items-start justify-between p-3 rounded-lg bg-white/70 border border-white">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">
-                                  {deduction.module}
-                                </span>
-                              </div>
-                              <p className="text-sm text-gray-700 mt-1">
-                                {deduction.reason}
-                              </p>
-                            </div>
-                            <span className="flex-shrink-0 ml-3 text-sm font-bold text-red-600">
-                              -{deduction.points}分
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {qualityScore.missingFields.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
-                        <XCircle className="w-4 h-4 text-red-500" />
-                        缺失关键字段
-                      </h4>
-                      <div className="flex flex-wrap gap-2">
-                        {qualityScore.missingFields.map((field, index) => (
-                          <span
-                            key={index}
-                            className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200"
-                          >
-                            <XCircle className="w-3 h-3 mr-1" />
-                            {field}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="flex items-center justify-center h-full py-8">
-                  <div className="text-center">
-                    <CheckCircle2 className="w-12 h-12 text-green-500 mx-auto mb-3" />
-                    <p className="text-base font-semibold text-green-700">无扣分项，归档质量优秀</p>
-                    <p className="text-sm text-gray-500 mt-1">所有检查项均已达标，可以放心归档</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-          <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <FileDown className="w-5 h-5 text-gray-500" />
-            导出档案
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div className="p-4 rounded-lg bg-blue-50 border border-blue-100">
-              <div className="flex items-center gap-2 mb-2">
-                <FileText className="w-5 h-5 text-blue-600" />
-                <span className="text-sm font-medium text-blue-900">导出PDF</span>
-              </div>
-              <p className="text-xs text-blue-700 mb-3">导出当前预览内容为PDF格式档案</p>
-              <button
-                onClick={handleExportPDF}
-                className="w-full px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-1.5"
-              >
-                <Download className="w-4 h-4" />
-                导出PDF
-              </button>
-            </div>
-            <div className="p-4 rounded-lg bg-purple-50 border border-purple-100">
-              <div className="flex items-center gap-2 mb-2">
-                <FolderOpen className="w-5 h-5 text-purple-600" />
-                <span className="text-sm font-medium text-purple-900">完整交接包</span>
-              </div>
-              <p className="text-xs text-purple-700 mb-3">导出完整交接包（10个Sheet，含签收记录和核验清单）</p>
-              <button
-                onClick={handleExportCompletePackage}
-                className={cn(
-                  'w-full px-3 py-2 text-sm font-medium text-white rounded-lg transition-colors flex items-center justify-center gap-1.5',
-                  uncompletedModules.length === 0
-                    ? 'bg-purple-600 hover:bg-purple-700'
-                    : 'bg-purple-400 cursor-not-allowed'
-                )}
-                disabled={uncompletedModules.length > 0}
-              >
-                <Download className="w-4 h-4" />
-                {uncompletedModules.length === 0 ? '一键导出' : '暂不可用'}
-              </button>
-            </div>
-            <div className="p-4 rounded-lg bg-gray-50 border border-gray-200">
-              <h4 className="text-sm font-medium text-gray-900 mb-2">导出说明</h4>
-              <ul className="text-xs text-gray-600 space-y-1">
-                <li>• <strong>PDF格式</strong>: 包含当前选中选项卡的内容，适合打印存档</li>
-                <li>• <strong>完整交接包</strong>: 包含所有模块数据、签收记录和核验清单，共10个Sheet</li>
-                <li>• 文件名自动包含员工姓名和导出日期</li>
-                <li>• 交接包导出需所有模块完成后可用</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        {isHR && (
-          <div className={cn(
-            'rounded-xl border shadow-sm p-5',
-            allCompleted && !isArchived
-              ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200'
-              : 'bg-gray-50 border-gray-200'
-          )}>
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div>
-                <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-                  <UserCheck className="w-5 h-5 text-gray-500" />
-                  HR最终确认
-                </h3>
-                <p className="text-sm text-gray-600 mt-1">
-                  {isArchived
-                    ? '该离职流程已完成归档。'
-                    : allCompleted
-                      ? '所有流程已完成，确认后将标记为已归档状态。'
-                      : `还有 ${incompleteItems.length} 项未完成，暂无法归档。`}
-                </p>
-              </div>
               <button
                 onClick={handleOpenPrecheckDialog}
-                disabled={!allCompleted || isArchived}
                 className={cn(
-                  'px-6 py-2.5 text-sm font-medium rounded-lg transition-colors flex items-center gap-2',
-                  allCompleted && !isArchived
-                    ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm'
-                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  'flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors',
+                  allCompleted && allSignedOff && checklistProgress.completed === checklistProgress.total
+                    ? 'bg-green-600 text-white hover:bg-green-700'
+                    : 'bg-gray-600 text-white hover:bg-gray-700'
                 )}
               >
-                <Archive className="w-4 h-4" />
-                {isArchived ? '已归档' : '确认归档'}
+                <FolderOpen className="w-4 h-4" />
+                完成归档
               </button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {confirmDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/50"
-            onClick={() => {
-              setConfirmDialogOpen(false);
-              setExceptionNotesInput('');
-            }}
-          />
-          <div className="relative w-full max-w-2xl bg-white rounded-xl shadow-xl overflow-hidden max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between p-5 border-b border-gray-200 flex-shrink-0">
-              <h2 className="text-lg font-semibold text-gray-900">归档前预检</h2>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">归档确认</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  {precheckIssues.hasIssues ? '存在待处理问题，请确认是否继续归档' : '确认完成归档操作？'}
+                </p>
+              </div>
               <button
-                onClick={() => {
-                  setConfirmDialogOpen(false);
-                  setExceptionNotesInput('');
-                }}
-                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+                onClick={() => setConfirmDialogOpen(false)}
+                className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <X className="w-5 h-5" />
+                <X className="w-5 h-5 text-gray-400" />
               </button>
             </div>
-            <div className="p-5 overflow-y-auto flex-1 space-y-5">
-              {precheckIssues.hasIssues ? (
-                <>
-                  <div className="flex items-start gap-3 p-4 rounded-lg bg-orange-50 border border-orange-200">
-                    <AlertTriangle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-sm font-medium text-orange-800 mb-1">
-                        预检发现 {
-                          (precheckIssues.unsignedRoles?.length || 0) +
-                          (precheckIssues.uncheckedItems?.length || 0) +
-                          (precheckIssues.missingAttachments?.length || 0) +
-                          (precheckIssues.emptyKeyFields?.length || 0)
-                        } 项问题
-                      </p>
-                      <p className="text-sm text-orange-700">
-                        建议先处理以下问题后再进行归档操作。如确需继续归档，请填写例外说明。
-                      </p>
+
+            {precheckIssues.hasIssues && (
+              <div className="space-y-3 mb-4">
+                {precheckIssues.unsignedRoles && precheckIssues.unsignedRoles.length > 0 && (
+                  <div className="p-3 bg-orange-50 rounded-lg border border-orange-100">
+                    <p className="text-sm font-medium text-orange-800">
+                      未签收角色 ({precheckIssues.unsignedRoles.length}项)
+                    </p>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {precheckIssues.unsignedRoles.map((role: string) => (
+                        <span key={role} className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded">
+                          {roleLabels[role] || role}
+                        </span>
+                      ))}
                     </div>
                   </div>
-
-                  {precheckIssues.unsignedRoles && precheckIssues.unsignedRoles.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
-                        <UserCheck className="w-4 h-4 text-gray-500" />
-                        未签收角色（{precheckIssues.unsignedRoles.length}）
-                      </h4>
-                      <div className="space-y-2">
-                        {precheckIssues.unsignedRoles.map((role: string, index: number) => (
-                          <div key={index} className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100">
-                            <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
-                            <span className="text-sm text-red-700 font-medium">
-                              {roleLabels[role] || role}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {precheckIssues.uncheckedItems && precheckIssues.uncheckedItems.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
-                        <ClipboardCheck className="w-4 h-4 text-gray-500" />
-                        未核验风险项（{precheckIssues.uncheckedItems.length}）
-                      </h4>
-                      <div className="space-y-2">
-                        {precheckIssues.uncheckedItems.map((item: string, index: number) => (
-                          <div key={index} className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100">
-                            <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
-                            <span className="text-sm text-red-700">
-                              {item}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {precheckIssues.missingAttachments && precheckIssues.missingAttachments.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
-                        <Paperclip className="w-4 h-4 text-gray-500" />
-                        缺失附件提醒（{precheckIssues.missingAttachments.length}）
-                      </h4>
-                      <div className="space-y-2">
-                        {precheckIssues.missingAttachments.map((attach: string, index: number) => (
-                          <div key={index} className="flex items-center gap-2 p-3 rounded-lg bg-yellow-50 border border-yellow-100">
-                            <AlertCircle className="w-4 h-4 text-yellow-600 flex-shrink-0" />
-                            <span className="text-sm text-yellow-700">
-                              建议上传：{attach}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {precheckIssues.emptyKeyFields && precheckIssues.emptyKeyFields.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
-                        <FileText className="w-4 h-4 text-gray-500" />
-                        关键字段为空提醒（{precheckIssues.emptyKeyFields.length}）
-                      </h4>
-                      <div className="flex flex-wrap gap-2">
-                        {precheckIssues.emptyKeyFields.map((field: string, index: number) => (
-                          <span
-                            key={index}
-                            className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700 border border-yellow-200"
-                          >
-                            <AlertCircle className="w-3 h-3 mr-1" />
-                            {field}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      例外说明（必填，如果仍要继续归档）
-                    </label>
-                    <textarea
-                      value={exceptionNotesInput}
-                      onChange={(e) => setExceptionNotesInput(e.target.value)}
-                      rows={4}
-                      placeholder="请说明跳过上述预检问题的原因..."
-                      className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none"
-                    />
+                )}
+                {precheckIssues.uncheckedItems && precheckIssues.uncheckedItems.length > 0 && (
+                  <div className="p-3 bg-orange-50 rounded-lg border border-orange-100">
+                    <p className="text-sm font-medium text-orange-800">
+                      未核验项 ({precheckIssues.uncheckedItems.length}项)
+                    </p>
                   </div>
-                </>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-8">
-                  <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mb-4">
-                    <CheckCircle2 className="w-10 h-10 text-green-600" />
+                )}
+                {precheckIssues.missingAttachments && precheckIssues.missingAttachments.length > 0 && (
+                  <div className="p-3 bg-orange-50 rounded-lg border border-orange-100">
+                    <p className="text-sm font-medium text-orange-800">
+                      缺失附件 ({precheckIssues.missingAttachments.length}项)
+                    </p>
                   </div>
-                  <h3 className="text-base font-semibold text-gray-900 mb-2">预检通过</h3>
-                  <p className="text-sm text-gray-600 text-center mb-4">
-                    所有检查项均已通过，确认归档 {employee?.name || '该员工'} 的离职档案？
-                  </p>
-                  <p className="text-xs text-gray-500 text-center">
-                    归档后，所有相关数据将被标记为已完成状态，此操作不可撤销。
-                  </p>
+                )}
+                {precheckIssues.emptyKeyFields && precheckIssues.emptyKeyFields.length > 0 && (
+                  <div className="p-3 bg-orange-50 rounded-lg border border-orange-100">
+                    <p className="text-sm font-medium text-orange-800">
+                      关键字段为空 ({precheckIssues.emptyKeyFields.length}项)
+                    </p>
+                  </div>
+                )}
+                {qualityScore.deductions && qualityScore.deductions.length > 0 && (
+                  <div className="p-3 bg-red-50 rounded-lg border border-red-100">
+                    <p className="text-sm font-medium text-red-800">
+                      质量扣分项 ({qualityScore.deductions.length}项，共扣{qualityScore.deductions.reduce((sum: number, d: any) => sum + d.points, 0)}分)
+                    </p>
+                  </div>
+                )}
+
+                <div className="mt-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    例外说明 (可选)
+                  </label>
+                  <textarea
+                    value={exceptionNotesInput}
+                    onChange={(e) => setExceptionNotesInput(e.target.value)}
+                    placeholder="如有例外情况，请在此说明原因..."
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    rows={3}
+                  />
                 </div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 p-5 border-t border-gray-200 bg-gray-50 flex-shrink-0">
+              </div>
+            )}
+
+            <div className="flex gap-3 mt-6">
               <button
-                onClick={() => {
-                  setConfirmDialogOpen(false);
-                  setExceptionNotesInput('');
-                }}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                onClick={() => setConfirmDialogOpen(false)}
+                className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
               >
                 取消
               </button>
-              <button
-                onClick={handleArchiveConfirm}
-                disabled={precheckIssues.hasIssues && !exceptionNotesInput.trim()}
-                className={cn(
-                  'px-4 py-2 text-sm font-medium rounded-lg transition-colors flex items-center gap-1.5',
-                  (!precheckIssues.hasIssues || exceptionNotesInput.trim())
-                    ? 'text-white bg-blue-600 hover:bg-blue-700'
-                    : 'text-gray-400 bg-gray-200 cursor-not-allowed'
-                )}
-              >
-                <Check className="w-4 h-4" />
-                {precheckIssues.hasIssues ? '仍要继续归档' : '确认归档'}
-              </button>
+              {precheckIssues.hasIssues ? (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleCreateRectificationTasks}
+                    disabled={creatingRectifications}
+                    className="px-4 py-2 text-sm font-medium text-white bg-orange-600 rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50"
+                  >
+                    {creatingRectifications ? '生成中...' : '一键生成整改任务'}
+                  </button>
+                  <button
+                    onClick={handleArchiveConfirm}
+                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    仍要继续归档
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleArchiveConfirm}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  确认归档
+                </button>
+              )}
             </div>
           </div>
         </div>
       )}
 
       {signOffDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/50"
-            onClick={() => setSignOffDialogOpen(false)}
-          />
-          <div className="relative w-full max-w-md bg-white rounded-xl shadow-xl overflow-hidden">
-            <div className="flex items-center justify-between p-5 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">确认签收</h2>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {roleLabels[selectedSignOffRole || '']} 签收
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">请确认后完成签收</p>
+              </div>
               <button
                 onClick={() => setSignOffDialogOpen(false)}
-                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+                className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <X className="w-5 h-5" />
+                <X className="w-5 h-5 text-gray-400" />
               </button>
             </div>
-            <div className="p-5">
-              <div className="flex items-start gap-3 mb-4">
-                <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                  <UserCheck className="w-5 h-5 text-emerald-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-900 font-medium mb-1">
-                    确认以 {roleLabels[selectedSignOffRole || '']} 角色签收？
-                  </p>
-                  <p className="text-sm text-gray-600">
-                    签收后将记录您的姓名和签收时间，此操作不可撤销。
-                  </p>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  备注（可选）
-                </label>
-                <textarea
-                  value={signOffNotes}
-                  onChange={(e) => setSignOffNotes(e.target.value)}
-                  rows={3}
-                  placeholder="请输入签收备注..."
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none"
-                />
-              </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                备注 (可选)
+              </label>
+              <textarea
+                value={signOffNotes}
+                onChange={(e) => setSignOffNotes(e.target.value)}
+                placeholder="添加签收备注..."
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                rows={3}
+              />
             </div>
-            <div className="flex justify-end gap-2 p-5 border-t border-gray-200 bg-gray-50">
+
+            <div className="flex gap-3">
               <button
                 onClick={() => setSignOffDialogOpen(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
               >
                 取消
               </button>
               <button
                 onClick={handleSignOffConfirm}
-                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-1.5"
+                className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
               >
-                <Check className="w-4 h-4" />
                 确认签收
               </button>
             </div>

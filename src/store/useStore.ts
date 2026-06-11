@@ -11,7 +11,11 @@ import type {
   Attachment,
   AuditLog,
   SignOffNode,
-  ArchiveChecklistItem
+  ArchiveChecklistItem,
+  RectificationTask,
+  RectificationStatus,
+  RectificationSource,
+  SignOffRole,
 } from '../types';
 import {
   generateMockEmployees,
@@ -23,13 +27,14 @@ import {
   generateMockComments,
   generateMockAttachments,
   generateMockSignOffNodes,
-  generateMockArchiveChecklist
+  generateMockArchiveChecklist,
+  generateMockRectificationTasks,
 } from '../utils/mock';
 import { formatISO } from 'date-fns';
 
 type Role = 'employee' | 'supervisor' | 'it' | 'admin' | 'finance' | 'hr';
-type AuditAction = 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'supervisor_notes_updated' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation' | 'signoff_completed' | 'checklist_updated' | 'exception_noted';
-type AuditModule = 'general' | 'task' | 'asset' | 'permission' | 'settlement' | 'form' | 'archive' | 'signoff' | 'checklist';
+type AuditAction = 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'supervisor_notes_updated' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation' | 'signoff_completed' | 'checklist_updated' | 'exception_noted' | 'rectification_created' | 'rectification_completed' | 'rectification_updated';
+type AuditModule = 'general' | 'task' | 'asset' | 'permission' | 'settlement' | 'form' | 'archive' | 'signoff' | 'checklist' | 'rectification';
 
 interface StoreState {
   currentUser: Employee;
@@ -44,9 +49,18 @@ interface StoreState {
   auditLogs: AuditLog[];
   signOffNodes: SignOffNode[];
   archiveChecklist: ArchiveChecklistItem[];
+  rectificationTasks: RectificationTask[];
   currentRole: Role;
   settlementConfirmed: boolean;
   archiveExceptionNotes: string;
+  auditFilter: {
+    riskLevel?: string;
+    module?: string;
+    role?: string;
+    startDate?: string;
+    endDate?: string;
+    keyword?: string;
+  };
 
   initializeData: () => void;
   switchRole: (role: string) => void;
@@ -94,6 +108,52 @@ interface StoreState {
     hasIssues: boolean;
   };
   setArchiveExceptionNotes: (notes: string) => void;
+  createRectificationTasks: (issues: {
+    unsignedRoles: string[];
+    uncheckedItems: { id: string; title: string; category: string }[];
+    missingAttachments: string[];
+    emptyKeyFields: string[];
+    qualityDeductions: { module: string; reason: string; points: number }[];
+    exceptionNotes?: string;
+  }) => RectificationTask[];
+  updateRectificationTask: (id: string, data: Partial<RectificationTask>) => void;
+  completeRectificationTask: (id: string, notes?: string) => void;
+  getRectificationTasksByRole: (role: SignOffRole) => RectificationTask[];
+  getRectificationSummary: () => {
+    total: number;
+    pending: number;
+    completed: number;
+    withException: number;
+    byRiskLevel: Record<string, number>;
+    byModule: Record<string, number>;
+    byRole: Record<string, number>;
+  };
+  getAuditSummary: (filter?: any) => {
+    totalDeductionPoints: number;
+    totalExceptions: number;
+    totalRectifications: number;
+    completedRectifications: number;
+    byRiskLevel: Record<string, number>;
+    byModule: Record<string, number>;
+    byRole: Record<string, number>;
+    rectificationTrend: { date: string; created: number; completed: number }[];
+  };
+  getAuditFilter: () => {
+    riskLevel?: string;
+    module?: string;
+    role?: string;
+    startDate?: string;
+    endDate?: string;
+    keyword?: string;
+  };
+  setAuditFilter: (filter: {
+    riskLevel?: string;
+    module?: string;
+    role?: string;
+    startDate?: string;
+    endDate?: string;
+    keyword?: string;
+  }) => void;
 }
 
 const generateId = (): string => {
@@ -122,9 +182,11 @@ export const useStore = create<StoreState>()(
       auditLogs: [],
       signOffNodes: [],
       archiveChecklist: [],
+      rectificationTasks: [],
       currentRole: 'employee',
       settlementConfirmed: false,
       archiveExceptionNotes: '',
+      auditFilter: {},
 
       addAuditLog: (action: AuditAction, module: AuditModule, details: string, affectedItems?: string[]) => {
         const { currentUser } = get();
@@ -165,8 +227,10 @@ export const useStore = create<StoreState>()(
           auditLogs: [],
           signOffNodes: generateMockSignOffNodes(form.id),
           archiveChecklist: generateMockArchiveChecklist(form.id),
+          rectificationTasks: generateMockRectificationTasks(form.id),
           settlementConfirmed: false,
-          archiveExceptionNotes: ''
+          archiveExceptionNotes: '',
+          auditFilter: {}
         });
       },
 
@@ -689,6 +753,10 @@ export const useStore = create<StoreState>()(
             if (data.checked && !i.checked) {
               updates.checkedBy = currentUser.id;
               updates.checkedAt = now;
+            } else if (data.checked === false && i.checked) {
+              updates.checkedBy = undefined;
+              updates.checkedAt = undefined;
+              updates.notes = undefined;
             }
             return updates;
           }
@@ -856,6 +924,319 @@ export const useStore = create<StoreState>()(
         const { addAuditLog } = get();
         set({ archiveExceptionNotes: notes });
         addAuditLog('exception_noted', 'archive', `HR填写了归档例外说明：${notes || '（无内容）'}`);
+      },
+
+      createRectificationTasks: (issues: {
+        unsignedRoles: string[];
+        uncheckedItems: { id: string; title: string; category: string }[];
+        missingAttachments: string[];
+        emptyKeyFields: string[];
+        qualityDeductions: { module: string; reason: string; points: number }[];
+        exceptionNotes?: string;
+      }) => {
+        const { currentUser, resignationForm, addAuditLog } = get();
+        const formId = resignationForm?.id || '';
+        const now = formatISO(new Date());
+        const newTasks: RectificationTask[] = [];
+
+        const categoryRoleMap: Record<string, SignOffRole> = {
+          document: 'supervisor',
+          asset: 'admin',
+          finance: 'finance',
+          system: 'it',
+          hr: 'hr',
+        };
+
+        const moduleRoleMap: Record<string, SignOffRole> = {
+          '离职单': 'supervisor',
+          '交接任务': 'supervisor',
+          '资产归还': 'admin',
+          '权限关闭': 'it',
+          '结算确认': 'finance',
+          '多角色签收': 'hr',
+          '核验清单': 'hr',
+        };
+
+        issues.unsignedRoles.forEach(roleLabel => {
+          const roleMap: Record<string, SignOffRole> = {
+            '离职员工': 'employee',
+            '部门主管': 'supervisor',
+            'IT管理员': 'it',
+            '行政人员': 'admin',
+            '财务专员': 'finance',
+            'HR管理员': 'hr',
+          };
+          const role = roleMap[roleLabel] || 'hr';
+          newTasks.push({
+            id: 'rect-' + generateId(),
+            formId,
+            source: 'precheck_unsigned',
+            sourceDescription: `${roleLabel}未完成签收`,
+            category: 'signoff',
+            assigneeRole: role,
+            title: `完成${roleLabel}签收确认`,
+            description: `请完成${roleLabel}的签收确认工作`,
+            status: 'pending',
+            priority: 'high',
+            riskLevel: 'high',
+            createdAt: now,
+            createdBy: currentUser.id,
+            hasException: !!issues.exceptionNotes,
+            exceptionNotes: issues.exceptionNotes,
+          });
+        });
+
+        issues.uncheckedItems.forEach(item => {
+          const role = categoryRoleMap[item.category] || 'hr';
+          const riskLevel: 'low' | 'medium' | 'high' = item.category === 'asset' || item.category === 'finance' ? 'high' : 'medium';
+          const priority: 'high' | 'medium' | 'low' = riskLevel === 'high' ? 'high' : 'medium';
+          newTasks.push({
+            id: 'rect-' + generateId(),
+            formId,
+            source: 'precheck_unchecked',
+            sourceDescription: `${item.title}未核验`,
+            category: 'checklist',
+            assigneeRole: role,
+            relatedItemId: item.id,
+            title: `核验${item.title}`,
+            description: `请确认${item.title}已完成并核验通过`,
+            status: 'pending',
+            priority,
+            riskLevel,
+            createdAt: now,
+            createdBy: currentUser.id,
+            hasException: !!issues.exceptionNotes,
+            exceptionNotes: issues.exceptionNotes,
+          });
+        });
+
+        issues.missingAttachments.forEach(attachment => {
+          newTasks.push({
+            id: 'rect-' + generateId(),
+            formId,
+            source: 'precheck_missing',
+            sourceDescription: attachment,
+            category: 'attachment',
+            assigneeRole: 'hr',
+            title: `补充附件：${attachment}`,
+            description: `请上传缺失的附件：${attachment}`,
+            status: 'pending',
+            priority: 'medium',
+            riskLevel: 'medium',
+            createdAt: now,
+            createdBy: currentUser.id,
+            hasException: !!issues.exceptionNotes,
+            exceptionNotes: issues.exceptionNotes,
+          });
+        });
+
+        issues.emptyKeyFields.forEach(field => {
+          const role: SignOffRole = ['离职原因', '最后工作日', '交接人'].includes(field) ? 'employee' : 'supervisor';
+          newTasks.push({
+            id: 'rect-' + generateId(),
+            formId,
+            source: 'precheck_missing',
+            sourceDescription: `${field}为空`,
+            category: 'field',
+            assigneeRole: role,
+            title: `补全字段：${field}`,
+            description: `请填写缺失的关键字段：${field}`,
+            status: 'pending',
+            priority: 'medium',
+            riskLevel: 'medium',
+            createdAt: now,
+            createdBy: currentUser.id,
+            hasException: !!issues.exceptionNotes,
+            exceptionNotes: issues.exceptionNotes,
+          });
+        });
+
+        issues.qualityDeductions.forEach(deduction => {
+          const role = moduleRoleMap[deduction.module] || 'hr';
+          newTasks.push({
+            id: 'rect-' + generateId(),
+            formId,
+            source: 'quality_deduction',
+            sourceDescription: deduction.reason,
+            category: 'quality',
+            assigneeRole: role,
+            relatedModule: deduction.module,
+            title: `整改质量问题：${deduction.module}`,
+            description: `${deduction.reason}，扣${deduction.points}分，请尽快整改`,
+            status: 'pending',
+            priority: deduction.points >= 10 ? 'high' : 'medium',
+            riskLevel: deduction.points >= 10 ? 'high' : 'medium',
+            qualityScoreImpact: deduction.points,
+            createdAt: now,
+            createdBy: currentUser.id,
+            hasException: !!issues.exceptionNotes,
+            exceptionNotes: issues.exceptionNotes,
+          });
+        });
+
+        set(state => ({
+          rectificationTasks: [...state.rectificationTasks, ...newTasks]
+        }));
+
+        addAuditLog('rectification_created', 'rectification', `创建了${newTasks.length}个整改任务`, newTasks.map(t => t.id));
+
+        return newTasks;
+      },
+
+      updateRectificationTask: (id: string, data: Partial<RectificationTask>) => {
+        const { addAuditLog, rectificationTasks } = get();
+        const task = rectificationTasks.find(t => t.id === id);
+
+        set(state => ({
+          rectificationTasks: state.rectificationTasks.map(task =>
+            task.id === id ? { ...task, ...data } : task
+          )
+        }));
+
+        if (task) {
+          const changes: string[] = [];
+          if (data.status) changes.push(`状态改为${data.status}`);
+          if (data.priority) changes.push(`优先级改为${data.priority}`);
+          if (data.assigneeRole) changes.push(`责任人改为${data.assigneeRole}`);
+          addAuditLog('rectification_updated', 'rectification', `整改任务"${task.title}"已更新：${changes.join('、')}`, [id]);
+        }
+      },
+
+      completeRectificationTask: (id: string, notes?: string) => {
+        const { rectificationTasks, currentUser, addAuditLog } = get();
+        const task = rectificationTasks.find(t => t.id === id);
+        if (!task) return;
+
+        const now = formatISO(new Date());
+
+        set(state => ({
+          rectificationTasks: state.rectificationTasks.map(t =>
+            t.id === id ? {
+              ...t,
+              status: 'completed',
+              completedAt: now,
+              completedBy: currentUser.id,
+              completionNotes: notes || t.completionNotes
+            } : t
+          )
+        }));
+
+        addAuditLog('rectification_completed', 'rectification', `整改任务"${task.title}"已完成${notes ? `，备注：${notes}` : ''}`, [id]);
+      },
+
+      getRectificationTasksByRole: (role: SignOffRole) => {
+        const state = get();
+        return state.rectificationTasks.filter(t => t.assigneeRole === role && t.status !== 'completed');
+      },
+
+      getRectificationSummary: () => {
+        const state = get();
+        const tasks = state.rectificationTasks;
+
+        const total = tasks.length;
+        const pending = tasks.filter(t => t.status === 'pending').length;
+        const completed = tasks.filter(t => t.status === 'completed').length;
+        const withException = tasks.filter(t => t.hasException).length;
+
+        const byRiskLevel: Record<string, number> = {};
+        const byModule: Record<string, number> = {};
+        const byRole: Record<string, number> = {};
+
+        tasks.forEach(t => {
+          const rl = t.riskLevel || 'unknown';
+          byRiskLevel[rl] = (byRiskLevel[rl] || 0) + 1;
+
+          const mod = t.relatedModule || t.category || 'other';
+          byModule[mod] = (byModule[mod] || 0) + 1;
+
+          byRole[t.assigneeRole] = (byRole[t.assigneeRole] || 0) + 1;
+        });
+
+        return { total, pending, completed, withException, byRiskLevel, byModule, byRole };
+      },
+
+      getAuditSummary: (filter?: any) => {
+        const state = get();
+        let tasks = [...state.rectificationTasks];
+
+        if (filter) {
+          if (filter.riskLevel) {
+            tasks = tasks.filter(t => t.riskLevel === filter.riskLevel);
+          }
+          if (filter.module) {
+            tasks = tasks.filter(t => t.relatedModule === filter.module || t.category === filter.module);
+          }
+          if (filter.role) {
+            tasks = tasks.filter(t => t.assigneeRole === filter.role);
+          }
+        }
+
+        const qualityScore = state.getArchiveQualityScore();
+        const totalDeductionPoints = qualityScore.deductions.reduce((sum, d) => sum + d.points, 0);
+        const totalExceptions = tasks.filter(t => t.hasException).length;
+        const totalRectifications = tasks.length;
+        const completedRectifications = tasks.filter(t => t.status === 'completed').length;
+
+        const byRiskLevel: Record<string, number> = {};
+        const byModule: Record<string, number> = {};
+        const byRole: Record<string, number> = {};
+
+        tasks.forEach(t => {
+          const rl = t.riskLevel || 'unknown';
+          byRiskLevel[rl] = (byRiskLevel[rl] || 0) + 1;
+
+          const mod = t.relatedModule || t.category || 'other';
+          byModule[mod] = (byModule[mod] || 0) + 1;
+
+          byRole[t.assigneeRole] = (byRole[t.assigneeRole] || 0) + 1;
+        });
+
+        const rectificationTrend: { date: string; created: number; completed: number }[] = [];
+        const dateMap = new Map<string, { created: number; completed: number }>();
+
+        tasks.forEach(t => {
+          const createdDate = t.createdAt.split('T')[0];
+          if (!dateMap.has(createdDate)) {
+            dateMap.set(createdDate, { created: 0, completed: 0 });
+          }
+          dateMap.get(createdDate)!.created += 1;
+
+          if (t.completedAt) {
+            const completedDate = t.completedAt.split('T')[0];
+            if (!dateMap.has(completedDate)) {
+              dateMap.set(completedDate, { created: 0, completed: 0 });
+            }
+            dateMap.get(completedDate)!.completed += 1;
+          }
+        });
+
+        const sortedDates = Array.from(dateMap.keys()).sort();
+        sortedDates.forEach(date => {
+          rectificationTrend.push({
+            date,
+            created: dateMap.get(date)!.created,
+            completed: dateMap.get(date)!.completed
+          });
+        });
+
+        return {
+          totalDeductionPoints,
+          totalExceptions,
+          totalRectifications,
+          completedRectifications,
+          byRiskLevel,
+          byModule,
+          byRole,
+          rectificationTrend
+        };
+      },
+
+      getAuditFilter: () => {
+        return get().auditFilter;
+      },
+
+      setAuditFilter: (filter) => {
+        set({ auditFilter: filter });
       }
     }),
     {
@@ -873,9 +1254,11 @@ export const useStore = create<StoreState>()(
         auditLogs: state.auditLogs,
         signOffNodes: state.signOffNodes,
         archiveChecklist: state.archiveChecklist,
+        rectificationTasks: state.rectificationTasks,
         currentRole: state.currentRole,
         settlementConfirmed: state.settlementConfirmed,
-        archiveExceptionNotes: state.archiveExceptionNotes
+        archiveExceptionNotes: state.archiveExceptionNotes,
+        auditFilter: state.auditFilter
       })
     }
   )

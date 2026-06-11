@@ -92,13 +92,13 @@ export interface Attachment {
 export interface AuditLog {
   id: string;
   formId: string;
-  action: 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'supervisor_notes_updated' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation' | 'signoff_completed' | 'checklist_updated' | 'exception_noted';
+  action: 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'supervisor_notes_updated' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation' | 'signoff_completed' | 'checklist_updated' | 'exception_noted' | 'rectification_created' | 'rectification_completed' | 'rectification_updated';
   operatorId: string;
   operatorName: string;
   operatorRole: string;
   timestamp: string;
   details: string;
-  module: 'general' | 'task' | 'asset' | 'permission' | 'settlement' | 'form' | 'archive' | 'signoff' | 'checklist';
+  module: 'general' | 'task' | 'asset' | 'permission' | 'settlement' | 'form' | 'archive' | 'signoff' | 'checklist' | 'rectification';
   affectedItems?: string[];
 }
 
@@ -125,4 +125,43 @@ export interface ArchiveChecklistItem {
   checkedBy?: string;
   checkedAt?: string;
   notes?: string;
+}
+
+export type RectificationStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+export type RectificationPriority = 'high' | 'medium' | 'low';
+export type RectificationSource = 'precheck_unsigned' | 'precheck_unchecked' | 'precheck_missing' | 'quality_deduction' | 'manual';
+
+export interface RectificationTask {
+  id: string;
+  formId: string;
+  source: RectificationSource;
+  sourceDescription: string;
+  category: 'signoff' | 'checklist' | 'attachment' | 'field' | 'quality';
+  assigneeRole: SignOffRole;
+  assigneeId?: string;
+  title: string;
+  description: string;
+  status: RectificationStatus;
+  priority: RectificationPriority;
+  riskLevel?: 'low' | 'medium' | 'high' | 'critical';
+  qualityScoreImpact?: number;
+  createdAt: string;
+  createdBy: string;
+  dueDate?: string;
+  completedAt?: string;
+  completedBy?: string;
+  completionNotes?: string;
+  relatedModule?: string;
+  relatedItemId?: string;
+  hasException: boolean;
+  exceptionNotes?: string;
+}
+
+export interface AuditSummaryFilter {
+  riskLevel?: string;
+  module?: string;
+  role?: string;
+  startDate?: string;
+  endDate?: string;
+  keyword?: string;
 }
