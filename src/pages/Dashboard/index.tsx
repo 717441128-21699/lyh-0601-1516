@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -16,7 +16,8 @@ import {
   Flag,
   MessageSquare,
   History,
-  UserCheck
+  UserCheck,
+  Search
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import ProgressBar from '@/components/ProgressBar';
@@ -94,6 +95,9 @@ export default function DashboardPage() {
   const allCompleted = isAllCompleted();
   const unsignedOffRoles = getUnsignedOffRoles();
   const allSignedOff = isAllSignedOff();
+
+  const [auditModuleFilter, setAuditModuleFilter] = useState('all');
+  const [auditKeywordFilter, setAuditKeywordFilter] = useState('');
 
   const stats = useMemo(() => {
     const pendingTasks = handoverTasks.filter(t => t.status !== 'completed').length;
@@ -331,6 +335,18 @@ export default function DashboardPage() {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 5);
   }, [comments]);
+
+  const filteredAuditLogs = useMemo(() => {
+    let result = [...auditLogs];
+    if (auditModuleFilter !== 'all') {
+      result = result.filter(log => log.module === auditModuleFilter);
+    }
+    if (auditKeywordFilter.trim()) {
+      const keyword = auditKeywordFilter.trim().toLowerCase();
+      result = result.filter(log => log.details?.toLowerCase().includes(keyword));
+    }
+    return result;
+  }, [auditLogs, auditModuleFilter, auditKeywordFilter]);
 
   const getEmployee = (id: string) => employees.find(e => e.id === id);
 
@@ -733,27 +749,57 @@ export default function DashboardPage() {
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
               <History className="w-5 h-5 text-gray-500" />
               节点流转记录
             </h3>
-            <button
-              onClick={() => navigate('/archive')}
-              className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-0.5 transition-colors"
-            >
-              查看全部
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={auditModuleFilter}
+                onChange={(e) => setAuditModuleFilter(e.target.value)}
+                className="text-xs border border-gray-300 rounded-lg px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">全部</option>
+                <option value="form">离职单</option>
+                <option value="task">交接任务</option>
+                <option value="asset">资产归还</option>
+                <option value="permission">权限关闭</option>
+                <option value="settlement">结算确认</option>
+                <option value="archive">归档管理</option>
+                <option value="signoff">签收</option>
+                <option value="checklist">核验</option>
+              </select>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  value={auditKeywordFilter}
+                  onChange={(e) => setAuditKeywordFilter(e.target.value)}
+                  placeholder="搜索操作详情..."
+                  className="text-xs border border-gray-300 rounded-lg pl-8 pr-3 py-1.5 w-52 bg-white text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <button
+                onClick={() => navigate('/archive')}
+                className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-0.5 transition-colors"
+              >
+                查看全部
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+          <div className="mb-3">
+            <span className="text-xs text-gray-500">共 {filteredAuditLogs.length} 条记录</span>
           </div>
           <div className="space-y-3 max-h-96 overflow-y-auto">
-            {auditLogs.length === 0 ? (
+            {filteredAuditLogs.length === 0 ? (
               <div className="py-8 text-center">
                 <History className="w-10 h-10 text-gray-300 mx-auto mb-2" />
                 <p className="text-sm text-gray-500">暂无操作记录</p>
               </div>
             ) : (
-              auditLogs.slice(0, 20).map((log) => {
+              filteredAuditLogs.slice(0, 20).map((log) => {
                 const operator = getEmployee(log.operatorId);
                 return (
                   <div

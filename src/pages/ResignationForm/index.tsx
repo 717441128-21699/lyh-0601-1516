@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   User,
   Building2,
@@ -67,6 +67,26 @@ export default function ResignationFormPage() {
   );
   const [expandedReason, setExpandedReason] = useState(false);
   const [expandedHandover, setExpandedHandover] = useState(false);
+
+  useEffect(() => {
+    if (resignationForm && resignationForm.reason && !form.reason) {
+      setForm({
+        reason: resignationForm.reason,
+        lastWorkingDay: resignationForm.lastWorkingDay,
+        handoverPersonId: resignationForm.handoverPersonId,
+        employeeTodos: resignationForm.employeeTodos,
+        supervisorNotes: resignationForm.supervisorNotes,
+      });
+      setTodos(
+        (resignationForm.employeeTodos || []).map((text, index) => ({
+          id: `todo-${index}`,
+          text,
+          completed: false,
+          dueDate: resignationForm.lastWorkingDay,
+        }))
+      );
+    }
+  }, [resignationForm]);
 
   const employee = useMemo<Employee | undefined>(() => {
     return employees.find(e => e.id === resignationForm?.employeeId);

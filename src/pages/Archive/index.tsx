@@ -34,7 +34,8 @@ import {
   Users,
   Filter,
   FileOutput,
-  ChevronDown
+  ChevronDown,
+  Search
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import StatusBadge from '@/components/StatusBadge';
@@ -179,6 +180,8 @@ export default function ArchivePage() {
   const [auditOperatorFilter, setAuditOperatorFilter] = useState('all');
   const [auditStartDate, setAuditStartDate] = useState('');
   const [auditEndDate, setAuditEndDate] = useState('');
+  const [auditKeywordFilter, setAuditKeywordFilter] = useState('');
+  const [exceptionNotesInput, setExceptionNotesInput] = useState('');
 
   const {
     resignationForm,
@@ -202,7 +205,11 @@ export default function ArchivePage() {
     updateChecklistItem,
     getUnsignedOffRoles,
     isAllSignedOff,
-    getChecklistProgress
+    getChecklistProgress,
+    getArchiveQualityScore,
+    archiveExceptionNotes,
+    setArchiveExceptionNotes,
+    getArchivePrecheckIssues
   } = useStore();
 
   const overallProgress = getOverallProgress();
@@ -304,8 +311,55 @@ export default function ArchivePage() {
   }, [settlementItems]);
 
   const uncompletedModules = useMemo(() => {
-    return getUncompletedModules();
-  }, [getUncompletedModules]);
+    const modules = getUncompletedModules();
+    if (!allSignedOff && !modules.includes('多角色签收')) {
+      modules.push('多角色签收');
+    }
+    if (checklistProgress.completed < checklistProgress.total && !modules.includes('归档核验')) {
+      modules.push('归档核验');
+    }
+    return modules;
+  }, [getUncompletedModules, allSignedOff, checklistProgress]);
+
+  const qualityScore = useMemo(() => {
+    return getArchiveQualityScore();
+  }, [getArchiveQualityScore]);
+
+  const precheckIssues = useMemo(() => {
+    return getArchivePrecheckIssues();
+  }, [getArchivePrecheckIssues]);
+
+  const riskLevel = useMemo(() => {
+    return qualityScore.riskLevel;
+  }, [qualityScore]);
+
+  const riskLevelLabels: Record<string, string> = {
+    low: '低风险',
+    medium: '中风险',
+    high: '高风险',
+    critical: '严重风险'
+  };
+
+  const riskLevelColors: Record<string, string> = {
+    low: 'bg-green-50 border-green-200',
+    medium: 'bg-yellow-50 border-yellow-200',
+    high: 'bg-orange-50 border-orange-200',
+    critical: 'bg-red-50 border-red-200'
+  };
+
+  const riskLabelColors: Record<string, string> = {
+    low: 'bg-green-100 text-green-700',
+    medium: 'bg-yellow-100 text-yellow-700',
+    high: 'bg-orange-100 text-orange-700',
+    critical: 'bg-red-100 text-red-700'
+  };
+
+  const scoreNumberColors: Record<string, string> = {
+    low: 'text-green-600',
+    medium: 'text-yellow-600',
+    high: 'text-orange-600',
+    critical: 'text-red-600'
+  };
 
   const filteredAuditLogs = useMemo(() => {
     return auditLogs.filter((log: AuditLog) => {
@@ -327,9 +381,19 @@ export default function ArchivePage() {
           return false;
         }
       }
+      if (auditKeywordFilter) {
+        const keyword = auditKeywordFilter.toLowerCase();
+        const detailsMatch = log.details?.toLowerCase().includes(keyword);
+        const commentsMatch = comments.some((c: Comment) => 
+          c.content?.toLowerCase().includes(keyword)
+        );
+        if (!detailsMatch && !commentsMatch) {
+          return false;
+        }
+      }
       return true;
     });
-  }, [auditLogs, auditModuleFilter, auditOperatorFilter, auditStartDate, auditEndDate]);
+  }, [auditLogs, auditModuleFilter, auditOperatorFilter, auditStartDate, auditEndDate, auditKeywordFilter, comments]);
 
   const groupedChecklist = useMemo(() => {
     const groups: Record<string, ArchiveChecklistItem[]> = {};
@@ -391,8 +455,19 @@ export default function ArchivePage() {
   };
 
   const handleArchiveConfirm = () => {
+    if (precheckIssues.hasIssues) {
+      if (exceptionNotesInput.trim()) {
+        setArchiveExceptionNotes(exceptionNotesInput.trim());
+      }
+    }
     archiveResignation();
     setConfirmDialogOpen(false);
+    setExceptionNotesInput('');
+  };
+
+  const handleOpenPrecheckDialog = () => {
+    setExceptionNotesInput(archiveExceptionNotes || '');
+    setConfirmDialogOpen(true);
   };
 
   const handleExportPDF = async () => {
@@ -416,7 +491,10 @@ export default function ArchivePage() {
       attachments,
       auditLogs,
       signOffNodes: useStore.getState().signOffNodes,
-      archiveChecklist: useStore.getState().archiveChecklist
+      archiveChecklist: useStore.getState().archiveChecklist,
+      archiveExceptionNotes,
+      qualityScore,
+      precheckIssues
     };
     exportCompletePackage(storeState);
   };
@@ -1222,7 +1300,7 @@ export default function ArchivePage() {
                     <Filter className="w-4 h-4 text-gray-500" />
                     <span className="text-sm font-medium text-gray-700">筛选条件</span>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">所属模块</label>
                       <div className="relative">
@@ -1272,6 +1350,19 @@ export default function ArchivePage() {
                         className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">关键字搜索</label>
+                      <div className="relative">
+                        <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={auditKeywordFilter}
+                          onChange={(e) => setAuditKeywordFilter(e.target.value)}
+                          placeholder="搜索操作详情或意见内容..."
+                          className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-200 bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
                   </div>
                   <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200">
                     <span className="text-sm text-gray-600">
@@ -1300,6 +1391,11 @@ export default function ArchivePage() {
                   </div>
                 ) : (
                   <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700">
+                        共找到 {filteredAuditLogs.length} 条记录
+                      </span>
+                    </div>
                     {filteredAuditLogs.map((log: AuditLog) => {
                       const operator = getEmployee(log.operatorId);
                       return (
@@ -1398,6 +1494,108 @@ export default function ArchivePage() {
             <p className="text-xs text-gray-600 mt-2">
               完整交接包包含：离职单、交接任务、资产归还、权限关闭、财务结算、附件清单、流程记录、意见留痕、多角色签收、归档核验清单，共10个Sheet
             </p>
+            {qualityScore.score < 80 && (
+              <div className={cn(
+                'mt-3 p-3 rounded-lg border',
+                riskLevelColors[riskLevel]
+              )}>
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className={cn('w-4 h-4', scoreNumberColors[riskLevel])} />
+                  <span className={cn('text-sm font-medium', scoreNumberColors[riskLevel])}>
+                    归档质量评分: {qualityScore.score} 分（{riskLevelLabels[riskLevel]}），建议检查扣分项后再导出
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className={cn(
+          'rounded-xl border shadow-sm p-5',
+          riskLevelColors[riskLevel]
+        )}>
+          <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <Shield className="w-5 h-5 text-gray-500" />
+            归档质量评分
+          </h3>
+          <div className="flex flex-col lg:flex-row gap-6">
+            <div className="flex-shrink-0 flex flex-col items-center justify-center lg:w-48 p-4 rounded-xl bg-white/60 border border-white/80">
+              <div className={cn(
+                'text-6xl font-bold mb-2',
+                scoreNumberColors[riskLevel]
+              )}>
+                {qualityScore.score}
+              </div>
+              <span className={cn(
+                'inline-flex items-center px-3 py-1 rounded-full text-xs font-medium',
+                riskLabelColors[riskLevel]
+              )}>
+                {riskLevelLabels[riskLevel]}
+              </span>
+              <p className="text-xs text-gray-500 mt-3 text-center">
+                满分100分
+              </p>
+            </div>
+            <div className="flex-1 space-y-4">
+              {(qualityScore.deductions.length > 0 || qualityScore.missingFields.length > 0) ? (
+                <>
+                  {qualityScore.deductions.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+                        <AlertCircle className="w-4 h-4 text-orange-500" />
+                        扣分项明细
+                      </h4>
+                      <div className="space-y-2">
+                        {qualityScore.deductions.map((deduction, index) => (
+                          <div key={index} className="flex items-start justify-between p-3 rounded-lg bg-white/70 border border-white">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                                  {deduction.module}
+                                </span>
+                              </div>
+                              <p className="text-sm text-gray-700 mt-1">
+                                {deduction.reason}
+                              </p>
+                            </div>
+                            <span className="flex-shrink-0 ml-3 text-sm font-bold text-red-600">
+                              -{deduction.points}分
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {qualityScore.missingFields.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+                        <XCircle className="w-4 h-4 text-red-500" />
+                        缺失关键字段
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {qualityScore.missingFields.map((field, index) => (
+                          <span
+                            key={index}
+                            className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200"
+                          >
+                            <XCircle className="w-3 h-3 mr-1" />
+                            {field}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="flex items-center justify-center h-full py-8">
+                  <div className="text-center">
+                    <CheckCircle2 className="w-12 h-12 text-green-500 mx-auto mb-3" />
+                    <p className="text-base font-semibold text-green-700">无扣分项，归档质量优秀</p>
+                    <p className="text-sm text-gray-500 mt-1">所有检查项均已达标，可以放心归档</p>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1475,7 +1673,7 @@ export default function ArchivePage() {
                 </p>
               </div>
               <button
-                onClick={() => setConfirmDialogOpen(true)}
+                onClick={handleOpenPrecheckDialog}
                 disabled={!allCompleted || isArchived}
                 className={cn(
                   'px-6 py-2.5 text-sm font-medium rounded-lg transition-colors flex items-center gap-2',
@@ -1496,76 +1694,171 @@ export default function ArchivePage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/50"
-            onClick={() => setConfirmDialogOpen(false)}
+            onClick={() => {
+              setConfirmDialogOpen(false);
+              setExceptionNotesInput('');
+            }}
           />
-          <div className="relative w-full max-w-md bg-white rounded-xl shadow-xl overflow-hidden">
-            <div className="flex items-center justify-between p-5 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">确认归档</h2>
+          <div className="relative w-full max-w-2xl bg-white rounded-xl shadow-xl overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b border-gray-200 flex-shrink-0">
+              <h2 className="text-lg font-semibold text-gray-900">归档前预检</h2>
               <button
-                onClick={() => setConfirmDialogOpen(false)}
+                onClick={() => {
+                  setConfirmDialogOpen(false);
+                  setExceptionNotesInput('');
+                }}
                 className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-5">
-              <div className="flex items-start gap-3 mb-4">
-                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                  <Archive className="w-5 h-5 text-blue-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-900 font-medium mb-1">
-                    确定要归档 {employee?.name || '该员工'} 的离职档案吗？
+            <div className="p-5 overflow-y-auto flex-1 space-y-5">
+              {precheckIssues.hasIssues ? (
+                <>
+                  <div className="flex items-start gap-3 p-4 rounded-lg bg-orange-50 border border-orange-200">
+                    <AlertTriangle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-orange-800 mb-1">
+                        预检发现 {
+                          (precheckIssues.unsignedRoles?.length || 0) +
+                          (precheckIssues.uncheckedItems?.length || 0) +
+                          (precheckIssues.missingAttachments?.length || 0) +
+                          (precheckIssues.emptyKeyFields?.length || 0)
+                        } 项问题
+                      </p>
+                      <p className="text-sm text-orange-700">
+                        建议先处理以下问题后再进行归档操作。如确需继续归档，请填写例外说明。
+                      </p>
+                    </div>
+                  </div>
+
+                  {precheckIssues.unsignedRoles && precheckIssues.unsignedRoles.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+                        <UserCheck className="w-4 h-4 text-gray-500" />
+                        未签收角色（{precheckIssues.unsignedRoles.length}）
+                      </h4>
+                      <div className="space-y-2">
+                        {precheckIssues.unsignedRoles.map((role: string, index: number) => (
+                          <div key={index} className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100">
+                            <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                            <span className="text-sm text-red-700 font-medium">
+                              {roleLabels[role] || role}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {precheckIssues.uncheckedItems && precheckIssues.uncheckedItems.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+                        <ClipboardCheck className="w-4 h-4 text-gray-500" />
+                        未核验风险项（{precheckIssues.uncheckedItems.length}）
+                      </h4>
+                      <div className="space-y-2">
+                        {precheckIssues.uncheckedItems.map((item: string, index: number) => (
+                          <div key={index} className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100">
+                            <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                            <span className="text-sm text-red-700">
+                              {item}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {precheckIssues.missingAttachments && precheckIssues.missingAttachments.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+                        <Paperclip className="w-4 h-4 text-gray-500" />
+                        缺失附件提醒（{precheckIssues.missingAttachments.length}）
+                      </h4>
+                      <div className="space-y-2">
+                        {precheckIssues.missingAttachments.map((attach: string, index: number) => (
+                          <div key={index} className="flex items-center gap-2 p-3 rounded-lg bg-yellow-50 border border-yellow-100">
+                            <AlertCircle className="w-4 h-4 text-yellow-600 flex-shrink-0" />
+                            <span className="text-sm text-yellow-700">
+                              建议上传：{attach}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {precheckIssues.emptyKeyFields && precheckIssues.emptyKeyFields.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+                        <FileText className="w-4 h-4 text-gray-500" />
+                        关键字段为空提醒（{precheckIssues.emptyKeyFields.length}）
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {precheckIssues.emptyKeyFields.map((field: string, index: number) => (
+                          <span
+                            key={index}
+                            className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700 border border-yellow-200"
+                          >
+                            <AlertCircle className="w-3 h-3 mr-1" />
+                            {field}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      例外说明（必填，如果仍要继续归档）
+                    </label>
+                    <textarea
+                      value={exceptionNotesInput}
+                      onChange={(e) => setExceptionNotesInput(e.target.value)}
+                      rows={4}
+                      placeholder="请说明跳过上述预检问题的原因..."
+                      className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none"
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8">
+                  <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mb-4">
+                    <CheckCircle2 className="w-10 h-10 text-green-600" />
+                  </div>
+                  <h3 className="text-base font-semibold text-gray-900 mb-2">预检通过</h3>
+                  <p className="text-sm text-gray-600 text-center mb-4">
+                    所有检查项均已通过，确认归档 {employee?.name || '该员工'} 的离职档案？
                   </p>
-                  <p className="text-sm text-gray-600">
+                  <p className="text-xs text-gray-500 text-center">
                     归档后，所有相关数据将被标记为已完成状态，此操作不可撤销。
                   </p>
                 </div>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 space-y-1">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">离职单</span>
-                  <StatusBadge status={resignationForm?.status || ''} type="form" />
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">交接任务</span>
-                  <span className="text-gray-900 font-medium">
-                    {handoverTasks.filter(t => t.status === 'completed').length}/{handoverTasks.length} 完成
-                  </span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">资产归还</span>
-                  <span className="text-gray-900 font-medium">
-                    {assetItems.filter(a => a.status === 'returned').length}/{assetItems.length} 完成
-                  </span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">权限关闭</span>
-                  <span className="text-gray-900 font-medium">
-                    {permissionItems.filter(p => p.closed).length}/{permissionItems.length} 完成
-                  </span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">结算确认</span>
-                  <span className="text-gray-900 font-medium">
-                    {settlementItems.filter(s => ['confirmed', 'paid'].includes(s.status)).length}/{settlementItems.length} 完成
-                  </span>
-                </div>
-              </div>
+              )}
             </div>
-            <div className="flex justify-end gap-2 p-5 border-t border-gray-200 bg-gray-50">
+            <div className="flex justify-end gap-2 p-5 border-t border-gray-200 bg-gray-50 flex-shrink-0">
               <button
-                onClick={() => setConfirmDialogOpen(false)}
+                onClick={() => {
+                  setConfirmDialogOpen(false);
+                  setExceptionNotesInput('');
+                }}
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
               >
                 取消
               </button>
               <button
                 onClick={handleArchiveConfirm}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1.5"
+                disabled={precheckIssues.hasIssues && !exceptionNotesInput.trim()}
+                className={cn(
+                  'px-4 py-2 text-sm font-medium rounded-lg transition-colors flex items-center gap-1.5',
+                  (!precheckIssues.hasIssues || exceptionNotesInput.trim())
+                    ? 'text-white bg-blue-600 hover:bg-blue-700'
+                    : 'text-gray-400 bg-gray-200 cursor-not-allowed'
+                )}
               >
                 <Check className="w-4 h-4" />
-                确认归档
+                {precheckIssues.hasIssues ? '仍要继续归档' : '确认归档'}
               </button>
             </div>
           </div>

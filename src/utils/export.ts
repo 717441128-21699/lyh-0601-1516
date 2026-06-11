@@ -29,6 +29,9 @@ interface StoreState {
   auditLogs: AuditLog[];
   signOffNodes: SignOffNode[];
   archiveChecklist: ArchiveChecklistItem[];
+  archiveExceptionNotes?: string;
+  qualityScore?: { score: number; riskLevel: string; deductions: { module: string; reason: string; points: number }[] };
+  precheckIssues?: { unsignedRoles: string[]; uncheckedItems: string[]; missingAttachments: string[]; emptyKeyFields: string[] };
 }
 
 export async function exportToPDF(elementId: string, filename: string): Promise<void> {
@@ -296,6 +299,33 @@ export function exportCompletePackage(store: StoreState): void {
     '备注': '',
   }]);
   XLSX.utils.book_append_sheet(workbook, checklistSheet, '归档核验清单');
+
+  if (store.qualityScore) {
+    const { score, riskLevel, deductions } = store.qualityScore;
+    const qualityData: any[] = [
+      { '指标': '质量分数', '内容': score },
+      { '指标': '风险等级', '内容': riskLevel }
+    ];
+    if (deductions && deductions.length > 0) {
+      qualityData.push({ '指标': '', '内容': '' });
+      qualityData.push({ '指标': '扣分项明细', '内容': '' });
+      qualityData.push({ '指标': '模块', '内容': '原因' });
+      deductions.forEach(d => {
+        qualityData.push({ '指标': d.module, '内容': `${d.reason}（扣${d.points}分）` });
+      });
+    }
+    const qualitySheet = XLSX.utils.json_to_sheet(qualityData);
+    XLSX.utils.book_append_sheet(workbook, qualitySheet, '归档质量评估');
+  }
+
+  if (store.archiveExceptionNotes) {
+    const exceptionData = [
+      { '项目': '例外说明', '内容': store.archiveExceptionNotes },
+      { '项目': '备注', '内容': 'HR确认以上例外后归档' }
+    ];
+    const exceptionSheet = XLSX.utils.json_to_sheet(exceptionData);
+    XLSX.utils.book_append_sheet(workbook, exceptionSheet, '归档例外说明');
+  }
 
   XLSX.writeFile(workbook, `${employeeName}_离职交接完整档案_${timestamp}.xlsx`);
 }

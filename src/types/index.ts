@@ -92,7 +92,7 @@ export interface Attachment {
 export interface AuditLog {
   id: string;
   formId: string;
-  action: 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'supervisor_notes_updated' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation' | 'signoff_completed' | 'checklist_updated';
+  action: 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'supervisor_notes_updated' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation' | 'signoff_completed' | 'checklist_updated' | 'exception_noted';
   operatorId: string;
   operatorName: string;
   operatorRole: string;

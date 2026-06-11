@@ -28,7 +28,7 @@ import {
 import { formatISO } from 'date-fns';
 
 type Role = 'employee' | 'supervisor' | 'it' | 'admin' | 'finance' | 'hr';
-type AuditAction = 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'supervisor_notes_updated' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation' | 'signoff_completed' | 'checklist_updated';
+type AuditAction = 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'supervisor_notes_updated' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation' | 'signoff_completed' | 'checklist_updated' | 'exception_noted';
 type AuditModule = 'general' | 'task' | 'asset' | 'permission' | 'settlement' | 'form' | 'archive' | 'signoff' | 'checklist';
 
 interface StoreState {
@@ -46,6 +46,7 @@ interface StoreState {
   archiveChecklist: ArchiveChecklistItem[];
   currentRole: Role;
   settlementConfirmed: boolean;
+  archiveExceptionNotes: string;
 
   initializeData: () => void;
   switchRole: (role: string) => void;
@@ -79,6 +80,20 @@ interface StoreState {
   saveFormDraft: (data: Partial<ResignationForm>) => void;
   submitFormForReview: (data: Partial<ResignationForm>) => void;
   updateSupervisorNotes: (notes: string) => void;
+  getArchiveQualityScore: () => {
+    score: number;
+    riskLevel: 'low' | 'medium' | 'high' | 'critical';
+    deductions: { module: string; reason: string; points: number }[];
+    missingFields: string[];
+  };
+  getArchivePrecheckIssues: () => {
+    unsignedRoles: string[];
+    uncheckedItems: string[];
+    missingAttachments: string[];
+    emptyKeyFields: string[];
+    hasIssues: boolean;
+  };
+  setArchiveExceptionNotes: (notes: string) => void;
 }
 
 const generateId = (): string => {
@@ -109,6 +124,7 @@ export const useStore = create<StoreState>()(
       archiveChecklist: [],
       currentRole: 'employee',
       settlementConfirmed: false,
+      archiveExceptionNotes: '',
 
       addAuditLog: (action: AuditAction, module: AuditModule, details: string, affectedItems?: string[]) => {
         const { currentUser } = get();
@@ -149,7 +165,8 @@ export const useStore = create<StoreState>()(
           auditLogs: [],
           signOffNodes: generateMockSignOffNodes(form.id),
           archiveChecklist: generateMockArchiveChecklist(form.id),
-          settlementConfirmed: false
+          settlementConfirmed: false,
+          archiveExceptionNotes: ''
         });
       },
 
@@ -718,6 +735,127 @@ export const useStore = create<StoreState>()(
         if (state.settlementItems.some(s => !['confirmed', 'paid'].includes(s.status))) return false;
 
         return true;
+      },
+
+      getArchiveQualityScore: () => {
+        const state = get();
+        const deductions: { module: string; reason: string; points: number }[] = [];
+        const missingFields: string[] = [];
+        let totalDeductions = 0;
+
+        if (state.resignationForm) {
+          const form = state.resignationForm;
+          if (!['completed', 'archived'].includes(form.status)) {
+            deductions.push({ module: '离职单', reason: '状态未完成', points: 15 });
+            totalDeductions += 15;
+          }
+          if (!form.reason || form.reason.trim() === '') {
+            deductions.push({ module: '离职单', reason: '离职原因为空', points: 5 });
+            totalDeductions += 5;
+            missingFields.push('离职原因');
+          }
+          if (!form.lastWorkingDay) {
+            deductions.push({ module: '离职单', reason: '最后工作日为空', points: 5 });
+            totalDeductions += 5;
+            missingFields.push('最后工作日');
+          }
+          if (!form.handoverPersonId) {
+            deductions.push({ module: '离职单', reason: '交接人为空', points: 5 });
+            totalDeductions += 5;
+            missingFields.push('交接人');
+          }
+        }
+
+        const uncompletedTasks = state.handoverTasks.filter(t => t.status !== 'completed');
+        const taskDeduction = Math.min(uncompletedTasks.length * 5, 20);
+        if (taskDeduction > 0) {
+          deductions.push({ module: '交接任务', reason: `${uncompletedTasks.length}个未完成任务`, points: taskDeduction });
+          totalDeductions += taskDeduction;
+        }
+
+        const unreturnedAssets = state.assetItems.filter(a => a.status !== 'returned');
+        const assetDeduction = Math.min(unreturnedAssets.length * 4, 15);
+        if (assetDeduction > 0) {
+          deductions.push({ module: '资产归还', reason: `${unreturnedAssets.length}个未归还资产`, points: assetDeduction });
+          totalDeductions += assetDeduction;
+        }
+
+        const unclosedPermissions = state.permissionItems.filter(p => !p.closed);
+        const permissionDeduction = Math.min(unclosedPermissions.length * 3, 15);
+        if (permissionDeduction > 0) {
+          deductions.push({ module: '权限关闭', reason: `${unclosedPermissions.length}个未关闭权限`, points: permissionDeduction });
+          totalDeductions += permissionDeduction;
+        }
+
+        const unconfirmedSettlements = state.settlementItems.filter(s => !['confirmed', 'paid'].includes(s.status));
+        const settlementDeduction = Math.min(unconfirmedSettlements.length * 5, 15);
+        if (settlementDeduction > 0) {
+          deductions.push({ module: '结算确认', reason: `${unconfirmedSettlements.length}个未确认结算项`, points: settlementDeduction });
+          totalDeductions += settlementDeduction;
+        }
+
+        const unsignedRoles = state.signOffNodes.filter(n => !n.signedOff);
+        const signoffDeduction = Math.min(unsignedRoles.length * 2, 10);
+        if (signoffDeduction > 0) {
+          deductions.push({ module: '多角色签收', reason: `${unsignedRoles.length}个未签收角色`, points: signoffDeduction });
+          totalDeductions += signoffDeduction;
+        }
+
+        const uncheckedItems = state.archiveChecklist.filter(i => !i.checked);
+        const checklistDeduction = Math.min(uncheckedItems.length * 1.5, 10);
+        if (checklistDeduction > 0) {
+          deductions.push({ module: '核验清单', reason: `${uncheckedItems.length}个未核验项`, points: checklistDeduction });
+          totalDeductions += checklistDeduction;
+        }
+
+        const score = Math.max(0, 100 - totalDeductions);
+        let riskLevel: 'low' | 'medium' | 'high' | 'critical';
+        if (score >= 90) {
+          riskLevel = 'low';
+        } else if (score >= 70) {
+          riskLevel = 'medium';
+        } else if (score >= 50) {
+          riskLevel = 'high';
+        } else {
+          riskLevel = 'critical';
+        }
+
+        return { score, riskLevel, deductions, missingFields };
+      },
+
+      getArchivePrecheckIssues: () => {
+        const state = get();
+        const roleLabels: Record<Role, string> = {
+          employee: '离职员工',
+          supervisor: '部门主管',
+          it: 'IT管理员',
+          admin: '行政人员',
+          finance: '财务专员',
+          hr: 'HR管理员'
+        };
+
+        const unsignedRoles = state.getUnsignedOffRoles().map(role => roleLabels[role]);
+        const uncheckedItems = state.archiveChecklist.filter(i => !i.checked).map(i => i.title);
+        const missingAttachments = state.attachments.length === 0 ? ['缺少离职相关附件'] : [];
+        const emptyKeyFields: string[] = [];
+
+        if (state.resignationForm) {
+          const form = state.resignationForm;
+          if (!form.reason || form.reason.trim() === '') emptyKeyFields.push('离职原因');
+          if (!form.lastWorkingDay) emptyKeyFields.push('最后工作日');
+          if (!form.handoverPersonId) emptyKeyFields.push('交接人');
+          if (!form.supervisorNotes || form.supervisorNotes.trim() === '') emptyKeyFields.push('主管意见');
+        }
+
+        const hasIssues = unsignedRoles.length > 0 || uncheckedItems.length > 0 || missingAttachments.length > 0 || emptyKeyFields.length > 0;
+
+        return { unsignedRoles, uncheckedItems, missingAttachments, emptyKeyFields, hasIssues };
+      },
+
+      setArchiveExceptionNotes: (notes: string) => {
+        const { addAuditLog } = get();
+        set({ archiveExceptionNotes: notes });
+        addAuditLog('exception_noted', 'archive', `HR填写了归档例外说明：${notes || '（无内容）'}`);
       }
     }),
     {
@@ -736,7 +874,8 @@ export const useStore = create<StoreState>()(
         signOffNodes: state.signOffNodes,
         archiveChecklist: state.archiveChecklist,
         currentRole: state.currentRole,
-        settlementConfirmed: state.settlementConfirmed
+        settlementConfirmed: state.settlementConfirmed,
+        archiveExceptionNotes: state.archiveExceptionNotes
       })
     }
   )
