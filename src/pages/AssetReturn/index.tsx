@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Laptop,
   Monitor,
@@ -16,7 +16,10 @@ import {
   Pencil,
   Check,
   X,
-  Lock
+  Lock,
+  CheckSquare,
+  Square,
+  Archive
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import StatusBadge from '@/components/StatusBadge';
@@ -80,6 +83,8 @@ export default function AssetReturn() {
     currentUser,
     resignationForm,
     updateAssetItem,
+    batchUpdateAssetItems,
+    addComment,
     employees,
   } = useStore();
 
@@ -87,6 +92,13 @@ export default function AssetReturn() {
   const [adminExpanded, setAdminExpanded] = useState(true);
   const [editingNote, setEditingNote] = useState<string | null>(null);
   const [noteValue, setNoteValue] = useState('');
+  const [itSelectedIds, setItSelectedIds] = useState<string[]>([]);
+  const [adminSelectedIds, setAdminSelectedIds] = useState<string[]>([]);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    category: 'it' | 'admin' | null;
+    selectedAssets: AssetItem[];
+  }>({ open: false, category: null, selectedAssets: [] });
 
   const canEditIt = currentRole === 'it' || currentRole === 'admin';
   const canEditAdmin = currentRole === 'admin';
@@ -120,6 +132,12 @@ export default function AssetReturn() {
     if (nextStatus === 'returned') {
       updates.returnedAt = formatISO(new Date()).split('T')[0];
       updates.returnedBy = currentUser.id;
+      
+      if (asset.category === 'it') {
+        setItSelectedIds(ids => ids.filter(id => id !== asset.id));
+      } else {
+        setAdminSelectedIds(ids => ids.filter(id => id !== asset.id));
+      }
     } else {
       updates.returnedAt = undefined;
       updates.returnedBy = undefined;
@@ -127,6 +145,14 @@ export default function AssetReturn() {
 
     updateAssetItem(asset.id, updates);
   };
+
+  useEffect(() => {
+    const returnedItIds = itAssets.filter(a => a.status === 'returned').map(a => a.id);
+    const returnedAdminIds = adminAssets.filter(a => a.status === 'returned').map(a => a.id);
+    
+    setItSelectedIds(ids => ids.filter(id => !returnedItIds.includes(id)));
+    setAdminSelectedIds(ids => ids.filter(id => !returnedAdminIds.includes(id)));
+  }, [assetItems, itAssets, adminAssets]);
 
   const handleNoteEdit = (asset: AssetItem) => {
     setEditingNote(asset.id);
@@ -144,20 +170,111 @@ export default function AssetReturn() {
     setNoteValue('');
   };
 
+  const handleSelectItem = (asset: AssetItem) => {
+    const canEdit = asset.category === 'it' ? canEditIt : canEditAdmin;
+    if (!canEdit || asset.status === 'returned') return;
+
+    const setSelected = asset.category === 'it' ? setItSelectedIds : setAdminSelectedIds;
+    const selectedIds = asset.category === 'it' ? itSelectedIds : adminSelectedIds;
+
+    if (selectedIds.includes(asset.id)) {
+      setSelected(selectedIds.filter(id => id !== asset.id));
+    } else {
+      setSelected([...selectedIds, asset.id]);
+    }
+  };
+
+  const handleSelectAll = (category: 'it' | 'admin') => {
+    const assets = category === 'it' ? itAssets : adminAssets;
+    const canEdit = category === 'it' ? canEditIt : canEditAdmin;
+    if (!canEdit) return;
+
+    const selectableIds = assets.filter(a => a.status !== 'returned').map(a => a.id);
+    const setSelected = category === 'it' ? setItSelectedIds : setAdminSelectedIds;
+    const selectedIds = category === 'it' ? itSelectedIds : adminSelectedIds;
+
+    if (selectedIds.length === selectableIds.length) {
+      setSelected([]);
+    } else {
+      setSelected(selectableIds);
+    }
+  };
+
+  const handleBatchReturn = (category: 'it' | 'admin') => {
+    const selectedIds = category === 'it' ? itSelectedIds : adminSelectedIds;
+    const assets = category === 'it' ? itAssets : adminAssets;
+    const selectedAssets = assets.filter(a => selectedIds.includes(a.id));
+
+    setConfirmDialog({
+      open: true,
+      category,
+      selectedAssets
+    });
+  };
+
+  const handleConfirmBatchReturn = () => {
+    const { category, selectedAssets } = confirmDialog;
+    if (!category || selectedAssets.length === 0) return;
+
+    const ids = selectedAssets.map(a => a.id);
+    batchUpdateAssetItems(ids, { status: 'returned' });
+
+    const assetNames = selectedAssets.map(a => a.name).join('、');
+    const commentContent = `批量确认归还 ${selectedAssets.length} 项资产：${assetNames}`;
+    addComment({
+      formId: resignationForm?.id || '',
+      authorId: currentUser.id,
+      content: commentContent,
+      category: 'asset'
+    });
+
+    if (category === 'it') {
+      setItSelectedIds([]);
+    } else {
+      setAdminSelectedIds([]);
+    }
+
+    setConfirmDialog({ open: false, category: null, selectedAssets: [] });
+  };
+
+  const handleCancelBatchReturn = () => {
+    setConfirmDialog({ open: false, category: null, selectedAssets: [] });
+  };
+
   const renderAssetRow = (asset: AssetItem) => {
     const canEdit = asset.category === 'it' ? canEditIt : canEditAdmin;
     const deviceType = getDeviceType(asset.name, asset.category);
     const iconMap = asset.category === 'it' ? itDeviceIconMap : adminItemIconMap;
     const overdue = isAssetOverdue(asset, resignationForm?.lastWorkingDay);
+    const selectedIds = asset.category === 'it' ? itSelectedIds : adminSelectedIds;
+    const isSelected = selectedIds.includes(asset.id);
+    const canSelect = canEdit && asset.status !== 'returned';
 
     return (
       <tr
         key={asset.id}
         className={cn(
           'border-b border-gray-100 last:border-b-0 transition-colors',
-          overdue && asset.status !== 'returned' ? 'bg-red-50' : 'hover:bg-gray-50'
+          overdue && asset.status !== 'returned' ? 'bg-red-50' : 'hover:bg-gray-50',
+          isSelected && 'bg-blue-50/50'
         )}
       >
+        <td className="px-4 py-3 w-12">
+          <button
+            onClick={() => handleSelectItem(asset)}
+            disabled={!canSelect}
+            className={cn(
+              'focus:outline-none transition-colors',
+              canSelect ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'
+            )}
+          >
+            {isSelected ? (
+              <CheckSquare className="w-4 h-4 text-blue-600" />
+            ) : (
+              <Square className="w-4 h-4 text-gray-400" />
+            )}
+          </button>
+        </td>
         <td className="px-4 py-3 w-12">
           <input
             type="checkbox"
@@ -285,11 +402,55 @@ export default function AssetReturn() {
           </button>
 
           {itExpanded && (
-            <div className="overflow-x-auto">
+            <>
+              {canEditIt && (
+                <div className="px-5 py-3 bg-gray-50/30 border-b border-gray-100 flex items-center gap-3">
+                  <button
+                    onClick={() => handleSelectAll('it')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    {itSelectedIds.length === itAssets.filter(a => a.status !== 'returned').length && itAssets.filter(a => a.status !== 'returned').length > 0 ? (
+                      <CheckSquare className="w-4 h-4 text-blue-600" />
+                    ) : (
+                      <Square className="w-4 h-4 text-gray-400" />
+                    )}
+                    {itSelectedIds.length === itAssets.filter(a => a.status !== 'returned').length && itAssets.filter(a => a.status !== 'returned').length > 0 ? '取消全选' : '全选'}
+                  </button>
+                  <button
+                    onClick={() => handleBatchReturn('it')}
+                    disabled={itSelectedIds.length === 0}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors',
+                      itSelectedIds.length > 0
+                        ? 'text-white bg-green-600 hover:bg-green-700'
+                        : 'text-gray-400 bg-gray-100 cursor-not-allowed'
+                    )}
+                  >
+                    <Archive className="w-4 h-4" />
+                    批量确认归还
+                    {itSelectedIds.length > 0 && (
+                      <span className="ml-0.5 px-1.5 py-0.5 text-xs bg-white/20 rounded-full">
+                        {itSelectedIds.length}
+                      </span>
+                    )}
+                  </button>
+                  {itSelectedIds.length > 0 && (
+                    <span className="text-sm text-gray-500">
+                      已选择 {itSelectedIds.length} 项
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="bg-gray-50/50 border-b border-gray-100">
-                    <th className="px-4 py-3 text-left w-12"></th>
+                    <th className="px-4 py-3 text-left w-12">
+                      <span className="text-xs font-semibold text-gray-500">选择</span>
+                    </th>
+                    <th className="px-4 py-3 text-left w-12">
+                      <span className="text-xs font-semibold text-gray-500">状态</span>
+                    </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                       设备名称
                     </th>
@@ -312,6 +473,7 @@ export default function AssetReturn() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
 
@@ -345,11 +507,55 @@ export default function AssetReturn() {
           </button>
 
           {adminExpanded && (
-            <div className="overflow-x-auto">
+            <>
+              {canEditAdmin && (
+                <div className="px-5 py-3 bg-gray-50/30 border-b border-gray-100 flex items-center gap-3">
+                  <button
+                    onClick={() => handleSelectAll('admin')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    {adminSelectedIds.length === adminAssets.filter(a => a.status !== 'returned').length && adminAssets.filter(a => a.status !== 'returned').length > 0 ? (
+                      <CheckSquare className="w-4 h-4 text-amber-600" />
+                    ) : (
+                      <Square className="w-4 h-4 text-gray-400" />
+                    )}
+                    {adminSelectedIds.length === adminAssets.filter(a => a.status !== 'returned').length && adminAssets.filter(a => a.status !== 'returned').length > 0 ? '取消全选' : '全选'}
+                  </button>
+                  <button
+                    onClick={() => handleBatchReturn('admin')}
+                    disabled={adminSelectedIds.length === 0}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors',
+                      adminSelectedIds.length > 0
+                        ? 'text-white bg-green-600 hover:bg-green-700'
+                        : 'text-gray-400 bg-gray-100 cursor-not-allowed'
+                    )}
+                  >
+                    <Archive className="w-4 h-4" />
+                    批量确认归还
+                    {adminSelectedIds.length > 0 && (
+                      <span className="ml-0.5 px-1.5 py-0.5 text-xs bg-white/20 rounded-full">
+                        {adminSelectedIds.length}
+                      </span>
+                    )}
+                  </button>
+                  {adminSelectedIds.length > 0 && (
+                    <span className="text-sm text-gray-500">
+                      已选择 {adminSelectedIds.length} 项
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="bg-gray-50/50 border-b border-gray-100">
-                    <th className="px-4 py-3 text-left w-12"></th>
+                    <th className="px-4 py-3 text-left w-12">
+                      <span className="text-xs font-semibold text-gray-500">选择</span>
+                    </th>
+                    <th className="px-4 py-3 text-left w-12">
+                      <span className="text-xs font-semibold text-gray-500">状态</span>
+                    </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                       物品名称
                     </th>
@@ -372,6 +578,7 @@ export default function AssetReturn() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
 
@@ -390,6 +597,62 @@ export default function AssetReturn() {
           <CommentSection category="asset" />
         </div>
       </div>
+
+      {confirmDialog.open && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[80vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-500" />
+                确认批量归还
+              </h3>
+            </div>
+            <div className="px-6 py-4 flex-1 overflow-y-auto">
+              <p className="text-sm text-gray-600 mb-4">
+                您即将确认归还以下 <span className="font-semibold text-gray-900">{confirmDialog.selectedAssets.length}</span> 项资产：
+              </p>
+              <div className="space-y-2">
+                {confirmDialog.selectedAssets.map((asset) => (
+                  <div
+                    key={asset.id}
+                    className="flex items-center gap-3 px-3 py-2 bg-gray-50 rounded-lg"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center flex-shrink-0">
+                      {asset.category === 'it'
+                        ? itDeviceIconMap[getDeviceType(asset.name, 'it')] || <Package className="w-4 h-4" />
+                        : adminItemIconMap[getDeviceType(asset.name, 'admin')] || <Package className="w-4 h-4" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{asset.name}</p>
+                      <p className="text-xs text-gray-500 font-mono">{asset.serialNumber}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
+                <p className="text-xs text-amber-800">
+                  <strong>注意：</strong>此操作将把选中的资产状态更新为"已归还"，并自动记录操作人和时间。
+                </p>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-3">
+              <button
+                onClick={handleCancelBatchReturn}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleConfirmBatchReturn}
+                className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2"
+              >
+                <Check className="w-4 h-4" />
+                确认归还
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

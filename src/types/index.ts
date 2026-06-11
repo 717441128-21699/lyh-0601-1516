@@ -88,3 +88,16 @@ export interface Attachment {
   uploadedBy: string;
   dataUrl?: string;
 }
+
+export interface AuditLog {
+  id: string;
+  formId: string;
+  action: 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation';
+  operatorId: string;
+  operatorName: string;
+  operatorRole: string;
+  timestamp: string;
+  details: string;
+  module: 'general' | 'task' | 'asset' | 'permission' | 'settlement' | 'form' | 'archive';
+  affectedItems?: string[];
+}

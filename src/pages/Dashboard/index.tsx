@@ -14,7 +14,9 @@ import {
   User,
   Calendar,
   Flag,
-  MessageSquare
+  MessageSquare,
+  History,
+  UserCheck
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import ProgressBar from '@/components/ProgressBar';
@@ -71,6 +73,7 @@ export default function DashboardPage() {
     settlementItems,
     comments,
     employees,
+    auditLogs,
     getOverallProgress,
     isAllCompleted
   } = useStore();
@@ -333,6 +336,53 @@ export default function DashboardPage() {
     settlement: 'bg-green-100 text-green-600'
   };
 
+  const actionLabels: Record<string, string> = {
+    form_saved: '保存离职单',
+    form_submitted: '提交离职申请',
+    supervisor_approved: '主管审核通过',
+    task_completed: '完成交接任务',
+    asset_returned: '归还资产',
+    permission_closed: '关闭权限',
+    settlement_confirmed: '确认结算',
+    hr_archived: 'HR归档',
+    comment_added: '添加意见',
+    attachment_uploaded: '上传附件',
+    batch_operation: '批量操作'
+  };
+
+  const actionColors: Record<string, string> = {
+    form_saved: 'bg-gray-100 text-gray-700',
+    form_submitted: 'bg-blue-100 text-blue-700',
+    supervisor_approved: 'bg-indigo-100 text-indigo-700',
+    task_completed: 'bg-blue-100 text-blue-700',
+    asset_returned: 'bg-orange-100 text-orange-700',
+    permission_closed: 'bg-purple-100 text-purple-700',
+    settlement_confirmed: 'bg-green-100 text-green-700',
+    hr_archived: 'bg-teal-100 text-teal-700',
+    comment_added: 'bg-yellow-100 text-yellow-700',
+    attachment_uploaded: 'bg-pink-100 text-pink-700',
+    batch_operation: 'bg-cyan-100 text-cyan-700'
+  };
+
+  const moduleLabels: Record<string, string> = {
+    general: '综合',
+    task: '交接任务',
+    asset: '资产归还',
+    permission: '权限关闭',
+    settlement: '结算确认',
+    form: '离职单',
+    archive: '归档管理'
+  };
+
+  const roleLabels: Record<string, string> = {
+    employee: '离职员工',
+    supervisor: '直属上级',
+    it: 'IT管理员',
+    admin: '行政人员',
+    finance: '财务人员',
+    hr: 'HR管理员'
+  };
+
   return (
     <div className="flex flex-col h-full bg-gray-50">
       <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
@@ -581,6 +631,74 @@ export default function DashboardPage() {
                         </span>
                       </div>
                       <p className="text-sm text-gray-600 line-clamp-2">{comment.content}</p>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+              <History className="w-5 h-5 text-gray-500" />
+              节点流转记录
+            </h3>
+            <button
+              onClick={() => navigate('/archive')}
+              className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-0.5 transition-colors"
+            >
+              查看全部
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {auditLogs.length === 0 ? (
+              <div className="py-8 text-center">
+                <History className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                <p className="text-sm text-gray-500">暂无操作记录</p>
+              </div>
+            ) : (
+              auditLogs.slice(0, 20).map((log) => {
+                const operator = getEmployee(log.operatorId);
+                return (
+                  <div
+                    key={log.id}
+                    className="flex gap-3 p-3 rounded-lg bg-gray-50 hover:bg-gray-100/50 transition-colors"
+                  >
+                    <div className="flex-shrink-0">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-xs font-medium">
+                        {operator?.name?.charAt(0) || log.operatorName?.charAt(0) || 'U'}
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-sm font-medium text-gray-900">
+                          {operator?.name || log.operatorName || '未知用户'}
+                        </span>
+                        <span className="text-xs text-gray-400">
+                          ({roleLabels[log.operatorRole] || log.operatorRole})
+                        </span>
+                        <span className={cn(
+                          'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
+                          actionColors[log.action] || 'bg-gray-100 text-gray-600'
+                        )}>
+                          {actionLabels[log.action] || log.action}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                          {moduleLabels[log.module] || log.module}
+                        </span>
+                        <span className="text-xs text-gray-400 ml-auto">
+                          {formatDate(log.timestamp, 'MM-dd HH:mm:ss')}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600">{log.details}</p>
+                      {log.affectedItems && log.affectedItems.length > 0 && (
+                        <p className="text-xs text-gray-400 mt-1">
+                          影响项: {log.affectedItems.length} 个
+                        </p>
+                      )}
                     </div>
                   </div>
                 );

@@ -312,6 +312,27 @@ export function generateMockPermissionItems(formId: string): PermissionItem[] {
       name: '生产数据库读写权限',
       closed: false,
     },
+    {
+      id: 'perm-' + generateId(),
+      formId,
+      type: 'system',
+      name: '企业微信/钉钉账号',
+      closed: false,
+    },
+    {
+      id: 'perm-' + generateId(),
+      formId,
+      type: 'vpn',
+      name: '无线网络权限',
+      closed: false,
+    },
+    {
+      id: 'perm-' + generateId(),
+      formId,
+      type: 'system',
+      name: '内部系统访问权限',
+      closed: false,
+    },
   ];
 }
 

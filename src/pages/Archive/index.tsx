@@ -21,17 +21,20 @@ import {
   Check,
   XCircle,
   FileSpreadsheet,
-  UserCheck
+  UserCheck,
+  History,
+  FolderOpen,
+  AlertTriangle
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import StatusBadge from '@/components/StatusBadge';
 import ProgressBar from '@/components/ProgressBar';
 import { cn } from '@/lib/utils';
 import { formatDate, isOverdue } from '@/utils/date';
-import { exportToPDF, exportAllData } from '@/utils/export';
-import type { HandoverTask, AssetItem, PermissionItem, SettlementItem, Comment, Attachment } from '@/types';
+import { exportToPDF, exportCompletePackage } from '@/utils/export';
+import type { HandoverTask, AssetItem, PermissionItem, SettlementItem, Comment, Attachment, AuditLog } from '@/types';
 
-type TabType = 'overview' | 'form' | 'tasks' | 'assets' | 'permissions' | 'settlement' | 'comments' | 'attachments';
+type TabType = 'overview' | 'form' | 'tasks' | 'assets' | 'permissions' | 'settlement' | 'comments' | 'attachments' | 'auditLogs';
 
 const tabList: { key: TabType; label: string; icon: typeof FileText }[] = [
   { key: 'overview', label: '概览摘要', icon: FileText },
@@ -41,7 +44,8 @@ const tabList: { key: TabType; label: string; icon: typeof FileText }[] = [
   { key: 'permissions', label: '权限关闭清单', icon: Shield },
   { key: 'settlement', label: '结算明细', icon: Calculator },
   { key: 'comments', label: '意见记录', icon: MessageSquare },
-  { key: 'attachments', label: '附件列表', icon: Paperclip }
+  { key: 'attachments', label: '附件列表', icon: Paperclip },
+  { key: 'auditLogs', label: '流程记录', icon: History }
 ];
 
 const taskCategoryLabels: Record<string, string> = {
@@ -135,10 +139,13 @@ export default function ArchivePage() {
     comments,
     attachments,
     employees,
+    auditLogs,
     currentRole,
     updateResignationForm,
     getOverallProgress,
-    isAllCompleted
+    isAllCompleted,
+    getUncompletedModules,
+    archiveResignation
   } = useStore();
 
   const overallProgress = getOverallProgress();
@@ -236,12 +243,52 @@ export default function ArchivePage() {
     return settlementItems.reduce((sum, item) => sum + item.amount, 0);
   }, [settlementItems]);
 
+  const uncompletedModules = useMemo(() => {
+    return getUncompletedModules();
+  }, [getUncompletedModules]);
+
   const getEmployee = (id: string) => employees.find(e => e.id === id);
 
+  const actionLabels: Record<string, string> = {
+    form_saved: '保存离职单',
+    form_submitted: '提交离职申请',
+    supervisor_approved: '主管审核通过',
+    task_completed: '完成交接任务',
+    asset_returned: '归还资产',
+    permission_closed: '关闭权限',
+    settlement_confirmed: '确认结算',
+    hr_archived: 'HR归档',
+    comment_added: '添加意见',
+    attachment_uploaded: '上传附件',
+    batch_operation: '批量操作'
+  };
+
+  const actionColors: Record<string, string> = {
+    form_saved: 'bg-gray-100 text-gray-700',
+    form_submitted: 'bg-blue-100 text-blue-700',
+    supervisor_approved: 'bg-indigo-100 text-indigo-700',
+    task_completed: 'bg-blue-100 text-blue-700',
+    asset_returned: 'bg-orange-100 text-orange-700',
+    permission_closed: 'bg-purple-100 text-purple-700',
+    settlement_confirmed: 'bg-green-100 text-green-700',
+    hr_archived: 'bg-teal-100 text-teal-700',
+    comment_added: 'bg-yellow-100 text-yellow-700',
+    attachment_uploaded: 'bg-pink-100 text-pink-700',
+    batch_operation: 'bg-cyan-100 text-cyan-700'
+  };
+
+  const moduleLabels: Record<string, string> = {
+    general: '综合',
+    task: '交接任务',
+    asset: '资产归还',
+    permission: '权限关闭',
+    settlement: '结算确认',
+    form: '离职单',
+    archive: '归档管理'
+  };
+
   const handleArchiveConfirm = () => {
-    if (resignationForm) {
-      updateResignationForm({ status: 'archived' });
-    }
+    archiveResignation();
     setConfirmDialogOpen(false);
   };
 
@@ -253,17 +300,20 @@ export default function ArchivePage() {
     }
   };
 
-  const handleExportExcel = () => {
+  const handleExportCompletePackage = () => {
     const storeState = {
+      currentUser: useStore.getState().currentUser,
       employees,
-      resignationForms: resignationForm ? [resignationForm] : [],
+      resignationForm,
       handoverTasks,
       assetItems,
       permissionItems,
       settlementItems,
-      comments
+      comments,
+      attachments,
+      auditLogs
     };
-    exportAllData(storeState);
+    exportCompletePackage(storeState);
   };
 
   return (
@@ -779,6 +829,112 @@ export default function ArchivePage() {
                 )}
               </div>
             )}
+
+            {activeTab === 'auditLogs' && (
+              <div className="space-y-3">
+                {auditLogs.length === 0 ? (
+                  <div className="py-8 text-center">
+                    <History className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                    <p className="text-sm text-gray-500">暂无流程记录</p>
+                  </div>
+                ) : (
+                  auditLogs.map((log: AuditLog) => {
+                    const operator = getEmployee(log.operatorId);
+                    return (
+                      <div key={log.id} className="p-4 rounded-lg bg-gray-50 border border-gray-100">
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
+                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-xs font-medium">
+                            {operator?.name?.charAt(0) || log.operatorName?.charAt(0) || 'U'}
+                          </div>
+                          <span className="text-sm font-medium text-gray-900">
+                            {operator?.name || log.operatorName || '未知用户'}
+                          </span>
+                          <span className="text-xs text-gray-400">
+                            ({roleLabels[log.operatorRole] || log.operatorRole})
+                          </span>
+                          <span className={cn(
+                            'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
+                            actionColors[log.action] || 'bg-gray-100 text-gray-600'
+                          )}>
+                            {actionLabels[log.action] || log.action}
+                          </span>
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                            {moduleLabels[log.module] || log.module}
+                          </span>
+                          <span className="text-xs text-gray-400 ml-auto">
+                            {formatDate(log.timestamp, 'yyyy-MM-dd HH:mm:ss')}
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-600 pl-8">{log.details}</p>
+                        {log.affectedItems && log.affectedItems.length > 0 && (
+                          <p className="text-xs text-gray-400 mt-1 pl-8">
+                            影响项: {log.affectedItems.length} 个
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className={cn(
+          'rounded-xl border shadow-sm p-5',
+          uncompletedModules.length === 0
+            ? 'bg-green-50 border-green-200'
+            : 'bg-orange-50 border-orange-200'
+        )}>
+          <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <FolderOpen className="w-5 h-5 text-gray-500" />
+            导出前预览
+          </h3>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              {uncompletedModules.length === 0 ? (
+                <CheckCircle2 className="w-5 h-5 text-green-600" />
+              ) : (
+                <AlertTriangle className="w-5 h-5 text-orange-600" />
+              )}
+              <span className={cn(
+                'text-sm font-medium',
+                uncompletedModules.length === 0 ? 'text-green-800' : 'text-orange-800'
+              )}>
+                {uncompletedModules.length === 0
+                  ? '所有模块已完成，可以导出完整交接包'
+                  : `还有 ${uncompletedModules.length} 个模块未完成`}
+              </span>
+            </div>
+            {uncompletedModules.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {uncompletedModules.map((module) => (
+                  <span
+                    key={module}
+                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-700 border border-orange-200"
+                  >
+                    <XCircle className="w-3 h-3 mr-1" />
+                    {module}
+                  </span>
+                ))}
+              </div>
+            )}
+            {uncompletedModules.length === 0 && (
+              <div className="flex flex-wrap gap-2">
+                {['离职单', '交接任务', '资产归还', '权限关闭', '结算确认'].map((module) => (
+                  <span
+                    key={module}
+                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700 border border-green-200"
+                  >
+                    <Check className="w-3 h-3 mr-1" />
+                    {module}
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-gray-600 mt-2">
+              完整交接包包含：离职单、交接任务、资产归还、权限关闭、财务结算、附件清单、流程记录、意见留痕，共8个Sheet
+            </p>
           </div>
         </div>
 
@@ -787,7 +943,7 @@ export default function ArchivePage() {
             <FileDown className="w-5 h-5 text-gray-500" />
             导出档案
           </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="p-4 rounded-lg bg-blue-50 border border-blue-100">
               <div className="flex items-center gap-2 mb-2">
                 <FileText className="w-5 h-5 text-blue-600" />
@@ -802,26 +958,33 @@ export default function ArchivePage() {
                 导出PDF
               </button>
             </div>
-            <div className="p-4 rounded-lg bg-green-50 border border-green-100">
+            <div className="p-4 rounded-lg bg-purple-50 border border-purple-100">
               <div className="flex items-center gap-2 mb-2">
-                <FileSpreadsheet className="w-5 h-5 text-green-600" />
-                <span className="text-sm font-medium text-green-900">导出Excel</span>
+                <FolderOpen className="w-5 h-5 text-purple-600" />
+                <span className="text-sm font-medium text-purple-900">完整交接包</span>
               </div>
-              <p className="text-xs text-green-700 mb-3">导出全部数据为Excel表格（多Sheet）</p>
+              <p className="text-xs text-purple-700 mb-3">导出完整交接包（8个Sheet，含流程记录）</p>
               <button
-                onClick={handleExportExcel}
-                className="w-full px-3 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-1.5"
+                onClick={handleExportCompletePackage}
+                className={cn(
+                  'w-full px-3 py-2 text-sm font-medium text-white rounded-lg transition-colors flex items-center justify-center gap-1.5',
+                  uncompletedModules.length === 0
+                    ? 'bg-purple-600 hover:bg-purple-700'
+                    : 'bg-purple-400 cursor-not-allowed'
+                )}
+                disabled={uncompletedModules.length > 0}
               >
                 <Download className="w-4 h-4" />
-                导出Excel
+                {uncompletedModules.length === 0 ? '一键导出' : '暂不可用'}
               </button>
             </div>
-            <div className="sm:col-span-2 p-4 rounded-lg bg-gray-50 border border-gray-200">
-              <h4 className="text-sm font-medium text-gray-900 mb-2">导出格式说明</h4>
+            <div className="p-4 rounded-lg bg-gray-50 border border-gray-200">
+              <h4 className="text-sm font-medium text-gray-900 mb-2">导出说明</h4>
               <ul className="text-xs text-gray-600 space-y-1">
                 <li>• <strong>PDF格式</strong>: 包含当前选中选项卡的内容，适合打印存档</li>
-                <li>• <strong>Excel格式</strong>: 包含所有模块数据（员工、离职单、任务、资产、权限、结算、评论），每个模块一个Sheet</li>
+                <li>• <strong>完整交接包</strong>: 包含所有模块数据和流程记录，共8个Sheet</li>
                 <li>• 文件名自动包含员工姓名和导出日期</li>
+                <li>• 交接包导出需所有模块完成后可用</li>
               </ul>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Calculator,
   DollarSign,
@@ -113,7 +113,18 @@ const reimbursementStatusMap: Record<string, { label: string; className: string 
 };
 
 export default function Settlement() {
-  const { currentUser, employees, resignationForm } = useStore();
+  const {
+    currentUser,
+    employees,
+    resignationForm,
+    settlementItems,
+    settlementConfirmed,
+    getSettlementProgress,
+    updateSettlementItem,
+    confirmSettlement,
+    addComment
+  } = useStore();
+
   const isFinance = currentUser.role === 'finance';
 
   const employee = useMemo(() => {
@@ -131,7 +142,34 @@ export default function Settlement() {
   const [compensation, setCompensation] = useState(75000);
 
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [settlementConfirmed, setSettlementConfirmed] = useState(false);
+
+  useEffect(() => {
+    setLoans(prevLoans => prevLoans.map(loan => {
+      const matchingItem = settlementItems.find(
+        item => item.type === 'loan' && item.description.includes(loan.reason)
+      );
+      if (matchingItem) {
+        const storeConfirmed = ['confirmed', 'paid'].includes(matchingItem.status);
+        if (loan.confirmed !== storeConfirmed) {
+          return { ...loan, confirmed: storeConfirmed };
+        }
+      }
+      return loan;
+    }));
+
+    setReimbursements(prevReimbs => prevReimbs.map(reimb => {
+      const matchingItem = settlementItems.find(
+        item => item.type === 'reimbursement' && Math.abs(item.amount - reimb.amount) < 1
+      );
+      if (matchingItem) {
+        const storeConfirmed = ['confirmed', 'paid'].includes(matchingItem.status);
+        if (reimb.confirmed !== storeConfirmed) {
+          return { ...reimb, confirmed: storeConfirmed };
+        }
+      }
+      return reimb;
+    }));
+  }, [settlementItems]);
 
   const basicSalary = useMemo(() => {
     return Math.round((MONTHLY_SALARY / MONTHLY_WORK_DAYS) * ACTUAL_ATTENDANCE * 100) / 100;
@@ -170,20 +208,24 @@ export default function Settlement() {
     return formatDate(date.toISOString(), 'yyyy-MM-dd');
   }, []);
 
-  const settlementProgress = useMemo(() => {
-    const total = loans.length + reimbursements.length + 3;
-    let done = 0;
-    loans.forEach(l => { if (l.confirmed) done++; });
-    reimbursements.forEach(r => { if (r.confirmed) done++; });
-    if (performanceBonus >= 0) done++;
-    if (compensation >= 0) done++;
-    if (settlementConfirmed) done++;
-    return Math.round((done / total) * 100);
-  }, [loans, reimbursements, performanceBonus, compensation, settlementConfirmed]);
+  const settlementProgress = getSettlementProgress();
 
   const toggleLoanConfirmed = (id: string) => {
     if (!isFinance) return;
-    setLoans(loans.map(l => l.id === id ? { ...l, confirmed: !l.confirmed } : l));
+    const loan = loans.find(l => l.id === id);
+    if (!loan) return;
+
+    const newConfirmed = !loan.confirmed;
+    setLoans(loans.map(l => l.id === id ? { ...l, confirmed: newConfirmed } : l));
+
+    const matchingItem = settlementItems.find(
+      item => item.type === 'loan' && item.description.includes(loan.reason)
+    );
+    if (matchingItem) {
+      updateSettlementItem(matchingItem.id, {
+        status: newConfirmed ? 'confirmed' as const : 'pending' as const
+      });
+    }
   };
 
   const setLoanHandleMethod = (id: string, method: 'deduct' | 'cash') => {
@@ -193,11 +235,67 @@ export default function Settlement() {
 
   const toggleReimbursementConfirmed = (id: string) => {
     if (!isFinance) return;
-    setReimbursements(reimbursements.map(r => r.id === id ? { ...r, confirmed: !r.confirmed } : r));
+    const reimb = reimbursements.find(r => r.id === id);
+    if (!reimb || reimb.status === 'pending_review') return;
+
+    const newConfirmed = !reimb.confirmed;
+    setReimbursements(reimbursements.map(r => r.id === id ? { ...r, confirmed: newConfirmed } : r));
+
+    const matchingItem = settlementItems.find(
+      item => item.type === 'reimbursement' && Math.abs(item.amount - reimb.amount) < 1
+    );
+    if (matchingItem) {
+      updateSettlementItem(matchingItem.id, {
+        status: newConfirmed ? 'confirmed' as const : 'pending' as const
+      });
+    }
   };
 
   const handleConfirmSettlement = () => {
-    setSettlementConfirmed(true);
+    confirmSettlement();
+
+    const loanDetails = loans
+      .filter(l => l.confirmed)
+      .map(l => `• ${l.reason}: ${formatCurrency(l.amount)} (${l.handleMethod === 'deduct' ? '从工资扣除' : '现金归还'})`)
+      .join('\n');
+
+    const reimbursementDetails = reimbursements
+      .filter(r => r.confirmed)
+      .map(r => `• ${r.orderNo}: ${formatCurrency(r.amount)}`)
+      .join('\n');
+
+    const commentContent = `【结算确认完成】
+员工：${employee?.name || '--'}
+实发金额：${formatCurrency(netPayable)}
+预计发放日期：${expectedPayDate}
+
+薪资明细：
+• 基本工资：${formatCurrency(basicSalary)}
+• 绩效奖金：${formatCurrency(performanceBonus)}
+• 加班费：${formatCurrency(overtimePay)}
+• 补贴：${formatCurrency(allowance)}
+• 年假折算：${formatCurrency(annualLeavePay)}
+• 离职补偿金：${formatCurrency(compensation)}
+• 社保公积金：-${formatCurrency(SOCIAL_SECURITY_HOUSING)}
+• 个人所得税：-${formatCurrency(PERSONAL_INCOME_TAX)}
+${otherDeduction > 0 ? `• 其他扣除：-${formatCurrency(otherDeduction)}\n` : ''}
+借款情况：
+${loanDetails || '• 无待结清借款'}
+
+报销情况：
+${reimbursementDetails || '• 无待确认报销'}
+
+应发合计：${formatCurrency(totalIncome)}
+扣除合计：${formatCurrency(totalDeduction)}
+实发金额：${formatCurrency(netPayable)}`;
+
+    addComment({
+      formId: resignationForm?.id || '',
+      authorId: currentUser.id,
+      content: commentContent,
+      category: 'settlement'
+    });
+
     setShowConfirmModal(false);
   };
 
@@ -290,7 +388,7 @@ export default function Settlement() {
                 <div className="space-y-2">
                   <div className="flex items-center gap-3">
                     <h2 className="text-lg font-bold text-gray-900">{employee?.name || '--'}</h2>
-                    <StatusBadge status="in_progress" type="form" />
+                    <StatusBadge status={resignationForm?.status || 'draft'} type="form" />
                   </div>
                   <div className="flex flex-wrap gap-x-5 gap-y-1.5">
                     <div className="flex items-center gap-1.5 text-sm text-gray-600">
