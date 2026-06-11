@@ -24,7 +24,17 @@ import {
   UserCheck,
   History,
   FolderOpen,
-  AlertTriangle
+  AlertTriangle,
+  ClipboardCheck,
+  User,
+  Shield as ShieldIcon,
+  Cpu,
+  Building2,
+  Banknote,
+  Users,
+  Filter,
+  FileOutput,
+  ChevronDown
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import StatusBadge from '@/components/StatusBadge';
@@ -32,9 +42,10 @@ import ProgressBar from '@/components/ProgressBar';
 import { cn } from '@/lib/utils';
 import { formatDate, isOverdue } from '@/utils/date';
 import { exportToPDF, exportCompletePackage } from '@/utils/export';
-import type { HandoverTask, AssetItem, PermissionItem, SettlementItem, Comment, Attachment, AuditLog } from '@/types';
+import type { HandoverTask, AssetItem, PermissionItem, SettlementItem, Comment, Attachment, AuditLog, SignOffNode, ArchiveChecklistItem } from '@/types';
+import * as XLSX from 'xlsx';
 
-type TabType = 'overview' | 'form' | 'tasks' | 'assets' | 'permissions' | 'settlement' | 'comments' | 'attachments' | 'auditLogs';
+type TabType = 'overview' | 'form' | 'tasks' | 'assets' | 'permissions' | 'settlement' | 'comments' | 'attachments' | 'auditLogs' | 'signoff' | 'checklist';
 
 const tabList: { key: TabType; label: string; icon: typeof FileText }[] = [
   { key: 'overview', label: '概览摘要', icon: FileText },
@@ -43,6 +54,8 @@ const tabList: { key: TabType; label: string; icon: typeof FileText }[] = [
   { key: 'assets', label: '资产归还清单', icon: Package },
   { key: 'permissions', label: '权限关闭清单', icon: Shield },
   { key: 'settlement', label: '结算明细', icon: Calculator },
+  { key: 'signoff', label: '签收看板', icon: UserCheck },
+  { key: 'checklist', label: '核验清单', icon: ClipboardCheck },
   { key: 'comments', label: '意见记录', icon: MessageSquare },
   { key: 'attachments', label: '附件列表', icon: Paperclip },
   { key: 'auditLogs', label: '流程记录', icon: History }
@@ -113,6 +126,35 @@ const roleLabels: Record<string, string> = {
   finance: '财务'
 };
 
+const roleIcons: Record<string, typeof User> = {
+  employee: User,
+  supervisor: Users,
+  it: Cpu,
+  admin: ShieldIcon,
+  finance: Banknote,
+  hr: Building2
+};
+
+const checklistCategoryLabels: Record<string, string> = {
+  document: '文档',
+  asset: '资产',
+  finance: '财务',
+  system: '系统',
+  hr: '人事'
+};
+
+const auditModuleFilterOptions = [
+  { value: 'all', label: '全部' },
+  { value: 'form', label: '离职单' },
+  { value: 'task', label: '交接任务' },
+  { value: 'asset', label: '资产归还' },
+  { value: 'permission', label: '权限关闭' },
+  { value: 'settlement', label: '结算确认' },
+  { value: 'archive', label: '归档管理' },
+  { value: 'signoff', label: '签收' },
+  { value: 'checklist', label: '核验' }
+];
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -129,6 +171,14 @@ export default function ArchivePage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [signOffDialogOpen, setSignOffDialogOpen] = useState(false);
+  const [selectedSignOffRole, setSelectedSignOffRole] = useState<string | null>(null);
+  const [signOffNotes, setSignOffNotes] = useState('');
+
+  const [auditModuleFilter, setAuditModuleFilter] = useState('all');
+  const [auditOperatorFilter, setAuditOperatorFilter] = useState('all');
+  const [auditStartDate, setAuditStartDate] = useState('');
+  const [auditEndDate, setAuditEndDate] = useState('');
 
   const {
     resignationForm,
@@ -140,18 +190,28 @@ export default function ArchivePage() {
     attachments,
     employees,
     auditLogs,
+    signOffNodes,
+    archiveChecklist,
     currentRole,
     updateResignationForm,
     getOverallProgress,
     isAllCompleted,
     getUncompletedModules,
-    archiveResignation
+    archiveResignation,
+    signOffNode,
+    updateChecklistItem,
+    getUnsignedOffRoles,
+    isAllSignedOff,
+    getChecklistProgress
   } = useStore();
 
   const overallProgress = getOverallProgress();
   const allCompleted = isAllCompleted();
   const isArchived = resignationForm?.status === 'archived';
   const isHR = currentRole === 'hr';
+  const checklistProgress = getChecklistProgress();
+  const unsignedOffRoles = getUnsignedOffRoles();
+  const allSignedOff = isAllSignedOff();
 
   const employee = useMemo(() => {
     return employees.find(e => e.id === resignationForm?.employeeId);
@@ -247,6 +307,41 @@ export default function ArchivePage() {
     return getUncompletedModules();
   }, [getUncompletedModules]);
 
+  const filteredAuditLogs = useMemo(() => {
+    return auditLogs.filter((log: AuditLog) => {
+      if (auditModuleFilter !== 'all' && log.module !== auditModuleFilter) {
+        return false;
+      }
+      if (auditOperatorFilter !== 'all' && log.operatorId !== auditOperatorFilter) {
+        return false;
+      }
+      if (auditStartDate) {
+        const logDate = new Date(log.timestamp).toISOString().split('T')[0];
+        if (logDate < auditStartDate) {
+          return false;
+        }
+      }
+      if (auditEndDate) {
+        const logDate = new Date(log.timestamp).toISOString().split('T')[0];
+        if (logDate > auditEndDate) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [auditLogs, auditModuleFilter, auditOperatorFilter, auditStartDate, auditEndDate]);
+
+  const groupedChecklist = useMemo(() => {
+    const groups: Record<string, ArchiveChecklistItem[]> = {};
+    archiveChecklist.forEach((item: ArchiveChecklistItem) => {
+      if (!groups[item.category]) {
+        groups[item.category] = [];
+      }
+      groups[item.category].push(item);
+    });
+    return groups;
+  }, [archiveChecklist]);
+
   const getEmployee = (id: string) => employees.find(e => e.id === id);
 
   const actionLabels: Record<string, string> = {
@@ -260,7 +355,10 @@ export default function ArchivePage() {
     hr_archived: 'HR归档',
     comment_added: '添加意见',
     attachment_uploaded: '上传附件',
-    batch_operation: '批量操作'
+    batch_operation: '批量操作',
+    signoff_completed: '完成签收',
+    checklist_updated: '更新核验项',
+    supervisor_notes_updated: '更新主管意见'
   };
 
   const actionColors: Record<string, string> = {
@@ -274,7 +372,10 @@ export default function ArchivePage() {
     hr_archived: 'bg-teal-100 text-teal-700',
     comment_added: 'bg-yellow-100 text-yellow-700',
     attachment_uploaded: 'bg-pink-100 text-pink-700',
-    batch_operation: 'bg-cyan-100 text-cyan-700'
+    batch_operation: 'bg-cyan-100 text-cyan-700',
+    signoff_completed: 'bg-emerald-100 text-emerald-700',
+    checklist_updated: 'bg-amber-100 text-amber-700',
+    supervisor_notes_updated: 'bg-slate-100 text-slate-700'
   };
 
   const moduleLabels: Record<string, string> = {
@@ -284,7 +385,9 @@ export default function ArchivePage() {
     permission: '权限关闭',
     settlement: '结算确认',
     form: '离职单',
-    archive: '归档管理'
+    archive: '归档管理',
+    signoff: '签收',
+    checklist: '核验'
   };
 
   const handleArchiveConfirm = () => {
@@ -311,9 +414,57 @@ export default function ArchivePage() {
       settlementItems,
       comments,
       attachments,
-      auditLogs
+      auditLogs,
+      signOffNodes: useStore.getState().signOffNodes,
+      archiveChecklist: useStore.getState().archiveChecklist
     };
     exportCompletePackage(storeState);
+  };
+
+  const handleOpenSignOffDialog = (role: string) => {
+    setSelectedSignOffRole(role);
+    setSignOffNotes('');
+    setSignOffDialogOpen(true);
+  };
+
+  const handleSignOffConfirm = () => {
+    if (selectedSignOffRole) {
+      signOffNode(selectedSignOffRole as any, signOffNotes || undefined);
+    }
+    setSignOffDialogOpen(false);
+    setSelectedSignOffRole(null);
+    setSignOffNotes('');
+  };
+
+  const handleChecklistItemToggle = (id: string, currentChecked: boolean) => {
+    if (!isHR) return;
+    updateChecklistItem(id, { checked: !currentChecked });
+  };
+
+  const handleChecklistNotesChange = (id: string, notes: string) => {
+    if (!isHR) return;
+    updateChecklistItem(id, { notes });
+  };
+
+  const handleExportAuditLogs = () => {
+    const data = filteredAuditLogs.map((log: AuditLog) => {
+      const operator = getEmployee(log.operatorId);
+      return {
+        '操作时间': formatDate(log.timestamp, 'yyyy-MM-dd HH:mm:ss'),
+        '操作人': operator?.name || log.operatorName || '未知用户',
+        '操作人角色': roleLabels[log.operatorRole] || log.operatorRole,
+        '操作类型': actionLabels[log.action] || log.action,
+        '所属模块': moduleLabels[log.module] || log.module,
+        '详情': log.details
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '审计明细');
+
+    const fileName = `审计明细_${formatDate(new Date(), 'yyyyMMdd')}.xlsx`;
+    XLSX.writeFile(wb, fileName);
   };
 
   return (
@@ -490,6 +641,41 @@ export default function ArchivePage() {
                   <div className="p-4 rounded-lg bg-green-50 border border-green-100">
                     <p className="text-xs text-green-600 mb-1">结算总金额</p>
                     <p className="text-2xl font-bold text-green-700">¥{totalSettlementAmount.toLocaleString()}</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                  <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-100">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs text-emerald-600">多角色签收进度</p>
+                      <UserCheck className="w-4 h-4 text-emerald-500" />
+                    </div>
+                    <p className="text-2xl font-bold text-emerald-700">
+                      {signOffNodes.filter((n: SignOffNode) => n.signedOff).length}/{signOffNodes.length}
+                    </p>
+                    <div className="mt-2">
+                      <ProgressBar
+                        value={signOffNodes.length > 0 ? Math.round((signOffNodes.filter((n: SignOffNode) => n.signedOff).length / signOffNodes.length) * 100) : 0}
+                        showLabel
+                        size="sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-lg bg-amber-50 border border-amber-100">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs text-amber-600">核验清单进度</p>
+                      <ClipboardCheck className="w-4 h-4 text-amber-500" />
+                    </div>
+                    <p className="text-2xl font-bold text-amber-700">
+                      {checklistProgress.completed}/{checklistProgress.total}
+                    </p>
+                    <div className="mt-2">
+                      <ProgressBar
+                        value={checklistProgress.total > 0 ? Math.round((checklistProgress.completed / checklistProgress.total) * 100) : 0}
+                        showLabel
+                        size="sm"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -755,6 +941,205 @@ export default function ArchivePage() {
               </div>
             )}
 
+            {activeTab === 'signoff' && (
+              <div className="space-y-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-gray-900">多角色签收看板</h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                      已签收 {signOffNodes.filter((n: SignOffNode) => n.signedOff).length} / 共 {signOffNodes.length} 个角色
+                    </p>
+                  </div>
+                  {allSignedOff ? (
+                    <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-700 border border-green-200 gap-1">
+                      <CheckCircle2 className="w-4 h-4" />
+                      全部已签收
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-orange-100 text-orange-700 border border-orange-200 gap-1">
+                      <AlertCircle className="w-4 h-4" />
+                      还有 {unsignedOffRoles.length} 个角色待签收
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {signOffNodes.map((node: SignOffNode) => {
+                    const RoleIcon = roleIcons[node.role] || User;
+                    const signer = node.signedOffBy ? getEmployee(node.signedOffBy) : null;
+                    const canSign = currentRole === node.role && !node.signedOff;
+
+                    return (
+                      <div
+                        key={node.id}
+                        className={cn(
+                          'p-4 rounded-xl border transition-all',
+                          node.signedOff
+                            ? 'bg-green-50/50 border-green-200'
+                            : 'bg-white border-gray-200 hover:border-gray-300'
+                        )}
+                      >
+                        <div className="flex items-start gap-3 mb-3">
+                          <div className={cn(
+                            'w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0',
+                            node.signedOff
+                              ? 'bg-green-100 text-green-600'
+                              : 'bg-gray-100 text-gray-500'
+                          )}>
+                            <RoleIcon className="w-5 h-5" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <h4 className="text-sm font-semibold text-gray-900">{node.title}</h4>
+                              <span className={cn(
+                                'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
+                                node.signedOff
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'bg-orange-100 text-orange-700'
+                              )}>
+                                {node.signedOff ? '已签收' : '待签收'}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-0.5">{node.description}</p>
+                            <p className="text-xs text-gray-400 mt-0.5">角色: {roleLabels[node.role]}</p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2 text-sm">
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-500 text-xs">签收人</span>
+                            <span className="text-gray-900 font-medium">
+                              {signer?.name || '-'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-500 text-xs">签收时间</span>
+                            <span className="text-gray-600">
+                              {node.signedOffAt ? formatDate(node.signedOffAt, 'yyyy-MM-dd') : '-'}
+                            </span>
+                          </div>
+                          {node.notes && (
+                            <div className="pt-2 mt-2 border-t border-gray-100">
+                              <span className="text-gray-500 text-xs">备注</span>
+                              <p className="text-gray-700 mt-1">{node.notes}</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {canSign && (
+                          <button
+                            onClick={() => handleOpenSignOffDialog(node.role)}
+                            className="mt-4 w-full px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-1.5"
+                          >
+                            <UserCheck className="w-4 h-4" />
+                            确认签收
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'checklist' && (
+              <div className="space-y-5">
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div>
+                    <h3 className="text-base font-semibold text-gray-900">归档核验清单</h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                      核验进度: 已核验 {checklistProgress.completed} / 共 {checklistProgress.total} 项
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <ProgressBar
+                      value={checklistProgress.total > 0 ? Math.round((checklistProgress.completed / checklistProgress.total) * 100) : 0}
+                      showLabel
+                      size="sm"
+                    />
+                    {!isHR && (
+                      <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">仅HR可操作</span>
+                    )}
+                  </div>
+                </div>
+
+                {Object.keys(groupedChecklist).map((category) => (
+                  <div key={category} className="space-y-3">
+                    <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                      <span className="w-1 h-4 bg-blue-500 rounded-full" />
+                      {checklistCategoryLabels[category]}
+                    </h4>
+                    <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+                      {groupedChecklist[category].map((item: ArchiveChecklistItem) => {
+                        const checker = item.checkedBy ? getEmployee(item.checkedBy) : null;
+                        return (
+                          <div key={item.id} className="p-4">
+                            <div className="flex items-start gap-3">
+                              <div className="flex-shrink-0 pt-0.5">
+                                <button
+                                  onClick={() => handleChecklistItemToggle(item.id, item.checked)}
+                                  disabled={!isHR}
+                                  className={cn(
+                                    'w-5 h-5 rounded border-2 flex items-center justify-center transition-colors',
+                                    item.checked
+                                      ? 'bg-green-600 border-green-600'
+                                      : 'border-gray-300 hover:border-gray-400',
+                                    !isHR && 'cursor-not-allowed opacity-60'
+                                  )}
+                                >
+                                  {item.checked && <Check className="w-3 h-3 text-white" />}
+                                </button>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-start justify-between gap-3">
+                                  <p className={cn(
+                                    'text-sm font-medium',
+                                    item.checked ? 'text-gray-500 line-through' : 'text-gray-900'
+                                  )}>
+                                    {item.title}
+                                  </p>
+                                  {item.checked && (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 flex-shrink-0">
+                                      已核验
+                                    </span>
+                                  )}
+                                </div>
+                                {item.checked && (
+                                  <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
+                                    {checker && (
+                                      <span>核验人: {checker.name}</span>
+                                    )}
+                                    {item.checkedAt && (
+                                      <span>核验时间: {formatDate(item.checkedAt, 'yyyy-MM-dd')}</span>
+                                    )}
+                                  </div>
+                                )}
+                                <div className="mt-3">
+                                  <input
+                                    type="text"
+                                    value={item.notes || ''}
+                                    onChange={(e) => handleChecklistNotesChange(item.id, e.target.value)}
+                                    disabled={!isHR}
+                                    placeholder={isHR ? '添加备注（可选）' : '仅HR可填写备注'}
+                                    className={cn(
+                                      'w-full px-3 py-2 text-sm rounded-lg border transition-colors',
+                                      isHR
+                                        ? 'border-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500'
+                                        : 'border-gray-100 bg-gray-50 cursor-not-allowed'
+                                    )}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {activeTab === 'comments' && (
               <div className="space-y-3">
                 {comments.length === 0 ? (
@@ -831,49 +1216,127 @@ export default function ArchivePage() {
             )}
 
             {activeTab === 'auditLogs' && (
-              <div className="space-y-3">
-                {auditLogs.length === 0 ? (
+              <div className="space-y-4">
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Filter className="w-4 h-4 text-gray-500" />
+                    <span className="text-sm font-medium text-gray-700">筛选条件</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">所属模块</label>
+                      <div className="relative">
+                        <select
+                          value={auditModuleFilter}
+                          onChange={(e) => setAuditModuleFilter(e.target.value)}
+                          className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 appearance-none pr-8"
+                        >
+                          {auditModuleFilterOptions.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="w-4 h-4 text-gray-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">操作者</label>
+                      <div className="relative">
+                        <select
+                          value={auditOperatorFilter}
+                          onChange={(e) => setAuditOperatorFilter(e.target.value)}
+                          className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 appearance-none pr-8"
+                        >
+                          <option value="all">全部</option>
+                          {employees.map(emp => (
+                            <option key={emp.id} value={emp.id}>{emp.name} ({roleLabels[emp.role]})</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="w-4 h-4 text-gray-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">开始日期</label>
+                      <input
+                        type="date"
+                        value={auditStartDate}
+                        onChange={(e) => setAuditStartDate(e.target.value)}
+                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">结束日期</label>
+                      <input
+                        type="date"
+                        value={auditEndDate}
+                        onChange={(e) => setAuditEndDate(e.target.value)}
+                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200">
+                    <span className="text-sm text-gray-600">
+                      筛选结果: 共 {filteredAuditLogs.length} 条记录
+                    </span>
+                    <button
+                      onClick={handleExportAuditLogs}
+                      disabled={filteredAuditLogs.length === 0}
+                      className={cn(
+                        'px-4 py-2 text-sm font-medium rounded-lg transition-colors flex items-center gap-1.5',
+                        filteredAuditLogs.length > 0
+                          ? 'text-white bg-green-600 hover:bg-green-700'
+                          : 'text-gray-400 bg-gray-200 cursor-not-allowed'
+                      )}
+                    >
+                      <FileOutput className="w-4 h-4" />
+                      导出筛选结果
+                    </button>
+                  </div>
+                </div>
+
+                {filteredAuditLogs.length === 0 ? (
                   <div className="py-8 text-center">
                     <History className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                    <p className="text-sm text-gray-500">暂无流程记录</p>
+                    <p className="text-sm text-gray-500">暂无符合条件的流程记录</p>
                   </div>
                 ) : (
-                  auditLogs.map((log: AuditLog) => {
-                    const operator = getEmployee(log.operatorId);
-                    return (
-                      <div key={log.id} className="p-4 rounded-lg bg-gray-50 border border-gray-100">
-                        <div className="flex items-center gap-2 mb-2 flex-wrap">
-                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-xs font-medium">
-                            {operator?.name?.charAt(0) || log.operatorName?.charAt(0) || 'U'}
+                  <div className="space-y-3">
+                    {filteredAuditLogs.map((log: AuditLog) => {
+                      const operator = getEmployee(log.operatorId);
+                      return (
+                        <div key={log.id} className="p-4 rounded-lg bg-gray-50 border border-gray-100">
+                          <div className="flex items-center gap-2 mb-2 flex-wrap">
+                            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-xs font-medium">
+                              {operator?.name?.charAt(0) || log.operatorName?.charAt(0) || 'U'}
+                            </div>
+                            <span className="text-sm font-medium text-gray-900">
+                              {operator?.name || log.operatorName || '未知用户'}
+                            </span>
+                            <span className="text-xs text-gray-400">
+                              ({roleLabels[log.operatorRole] || log.operatorRole})
+                            </span>
+                            <span className={cn(
+                              'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
+                              actionColors[log.action] || 'bg-gray-100 text-gray-600'
+                            )}>
+                              {actionLabels[log.action] || log.action}
+                            </span>
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                              {moduleLabels[log.module] || log.module}
+                            </span>
+                            <span className="text-xs text-gray-400 ml-auto">
+                              {formatDate(log.timestamp, 'yyyy-MM-dd HH:mm:ss')}
+                            </span>
                           </div>
-                          <span className="text-sm font-medium text-gray-900">
-                            {operator?.name || log.operatorName || '未知用户'}
-                          </span>
-                          <span className="text-xs text-gray-400">
-                            ({roleLabels[log.operatorRole] || log.operatorRole})
-                          </span>
-                          <span className={cn(
-                            'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
-                            actionColors[log.action] || 'bg-gray-100 text-gray-600'
-                          )}>
-                            {actionLabels[log.action] || log.action}
-                          </span>
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
-                            {moduleLabels[log.module] || log.module}
-                          </span>
-                          <span className="text-xs text-gray-400 ml-auto">
-                            {formatDate(log.timestamp, 'yyyy-MM-dd HH:mm:ss')}
-                          </span>
+                          <p className="text-sm text-gray-600 pl-8">{log.details}</p>
+                          {log.affectedItems && log.affectedItems.length > 0 && (
+                            <p className="text-xs text-gray-400 mt-1 pl-8">
+                              影响项: {log.affectedItems.length} 个
+                            </p>
+                          )}
                         </div>
-                        <p className="text-sm text-gray-600 pl-8">{log.details}</p>
-                        {log.affectedItems && log.affectedItems.length > 0 && (
-                          <p className="text-xs text-gray-400 mt-1 pl-8">
-                            影响项: {log.affectedItems.length} 个
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             )}
@@ -921,7 +1384,7 @@ export default function ArchivePage() {
             )}
             {uncompletedModules.length === 0 && (
               <div className="flex flex-wrap gap-2">
-                {['离职单', '交接任务', '资产归还', '权限关闭', '结算确认'].map((module) => (
+                {['离职单', '交接任务', '资产归还', '权限关闭', '结算确认', '多角色签收', '归档核验'].map((module) => (
                   <span
                     key={module}
                     className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700 border border-green-200"
@@ -933,7 +1396,7 @@ export default function ArchivePage() {
               </div>
             )}
             <p className="text-xs text-gray-600 mt-2">
-              完整交接包包含：离职单、交接任务、资产归还、权限关闭、财务结算、附件清单、流程记录、意见留痕，共8个Sheet
+              完整交接包包含：离职单、交接任务、资产归还、权限关闭、财务结算、附件清单、流程记录、意见留痕、多角色签收、归档核验清单，共10个Sheet
             </p>
           </div>
         </div>
@@ -963,7 +1426,7 @@ export default function ArchivePage() {
                 <FolderOpen className="w-5 h-5 text-purple-600" />
                 <span className="text-sm font-medium text-purple-900">完整交接包</span>
               </div>
-              <p className="text-xs text-purple-700 mb-3">导出完整交接包（8个Sheet，含流程记录）</p>
+              <p className="text-xs text-purple-700 mb-3">导出完整交接包（10个Sheet，含签收记录和核验清单）</p>
               <button
                 onClick={handleExportCompletePackage}
                 className={cn(
@@ -982,7 +1445,7 @@ export default function ArchivePage() {
               <h4 className="text-sm font-medium text-gray-900 mb-2">导出说明</h4>
               <ul className="text-xs text-gray-600 space-y-1">
                 <li>• <strong>PDF格式</strong>: 包含当前选中选项卡的内容，适合打印存档</li>
-                <li>• <strong>完整交接包</strong>: 包含所有模块数据和流程记录，共8个Sheet</li>
+                <li>• <strong>完整交接包</strong>: 包含所有模块数据、签收记录和核验清单，共10个Sheet</li>
                 <li>• 文件名自动包含员工姓名和导出日期</li>
                 <li>• 交接包导出需所有模块完成后可用</li>
               </ul>
@@ -1103,6 +1566,68 @@ export default function ArchivePage() {
               >
                 <Check className="w-4 h-4" />
                 确认归档
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {signOffDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setSignOffDialogOpen(false)}
+          />
+          <div className="relative w-full max-w-md bg-white rounded-xl shadow-xl overflow-hidden">
+            <div className="flex items-center justify-between p-5 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-900">确认签收</h2>
+              <button
+                onClick={() => setSignOffDialogOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5">
+              <div className="flex items-start gap-3 mb-4">
+                <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                  <UserCheck className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-900 font-medium mb-1">
+                    确认以 {roleLabels[selectedSignOffRole || '']} 角色签收？
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    签收后将记录您的姓名和签收时间，此操作不可撤销。
+                  </p>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  备注（可选）
+                </label>
+                <textarea
+                  value={signOffNotes}
+                  onChange={(e) => setSignOffNotes(e.target.value)}
+                  rows={3}
+                  placeholder="请输入签收备注..."
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 p-5 border-t border-gray-200 bg-gray-50">
+              <button
+                onClick={() => setSignOffDialogOpen(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSignOffConfirm}
+                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-1.5"
+              >
+                <Check className="w-4 h-4" />
+                确认签收
               </button>
             </div>
           </div>

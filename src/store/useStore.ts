@@ -9,7 +9,9 @@ import type {
   SettlementItem,
   Comment,
   Attachment,
-  AuditLog
+  AuditLog,
+  SignOffNode,
+  ArchiveChecklistItem
 } from '../types';
 import {
   generateMockEmployees,
@@ -19,13 +21,15 @@ import {
   generateMockPermissionItems,
   generateMockSettlementItems,
   generateMockComments,
-  generateMockAttachments
+  generateMockAttachments,
+  generateMockSignOffNodes,
+  generateMockArchiveChecklist
 } from '../utils/mock';
 import { formatISO } from 'date-fns';
 
 type Role = 'employee' | 'supervisor' | 'it' | 'admin' | 'finance' | 'hr';
-type AuditAction = 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation';
-type AuditModule = 'general' | 'task' | 'asset' | 'permission' | 'settlement' | 'form' | 'archive';
+type AuditAction = 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'supervisor_notes_updated' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation' | 'signoff_completed' | 'checklist_updated';
+type AuditModule = 'general' | 'task' | 'asset' | 'permission' | 'settlement' | 'form' | 'archive' | 'signoff' | 'checklist';
 
 interface StoreState {
   currentUser: Employee;
@@ -38,6 +42,8 @@ interface StoreState {
   comments: Comment[];
   attachments: Attachment[];
   auditLogs: AuditLog[];
+  signOffNodes: SignOffNode[];
+  archiveChecklist: ArchiveChecklistItem[];
   currentRole: Role;
   settlementConfirmed: boolean;
 
@@ -64,6 +70,15 @@ interface StoreState {
   isAllCompleted: () => boolean;
   getSettlementProgress: () => number;
   getUncompletedModules: () => string[];
+
+  signOffNode: (role: Role, notes?: string) => void;
+  updateChecklistItem: (id: string, data: Partial<ArchiveChecklistItem>) => void;
+  getUnsignedOffRoles: () => Role[];
+  isAllSignedOff: () => boolean;
+  getChecklistProgress: () => { completed: number; total: number };
+  saveFormDraft: (data: Partial<ResignationForm>) => void;
+  submitFormForReview: (data: Partial<ResignationForm>) => void;
+  updateSupervisorNotes: (notes: string) => void;
 }
 
 const generateId = (): string => {
@@ -90,6 +105,8 @@ export const useStore = create<StoreState>()(
       comments: [],
       attachments: [],
       auditLogs: [],
+      signOffNodes: [],
+      archiveChecklist: [],
       currentRole: 'employee',
       settlementConfirmed: false,
 
@@ -130,6 +147,8 @@ export const useStore = create<StoreState>()(
           comments: generateMockComments(form.id),
           attachments: generateMockAttachments(form.id),
           auditLogs: [],
+          signOffNodes: generateMockSignOffNodes(form.id),
+          archiveChecklist: generateMockArchiveChecklist(form.id),
           settlementConfirmed: false
         });
       },
@@ -561,6 +580,132 @@ export const useStore = create<StoreState>()(
         return counts;
       },
 
+      saveFormDraft: (data: Partial<ResignationForm>) => {
+        const { resignationForm, addAuditLog } = get();
+        if (!resignationForm) return;
+
+        set({
+          resignationForm: {
+            ...resignationForm,
+            ...data,
+            updatedAt: formatISO(new Date())
+          }
+        });
+
+        const changes: string[] = [];
+        if (data.reason) changes.push('离职原因');
+        if (data.lastWorkingDay) changes.push('最后工作日');
+        if (data.handoverPersonId) changes.push('交接人');
+        if (data.employeeTodos) changes.push('待办事项');
+        const changeDesc = changes.length > 0 ? `修改了：${changes.join('、')}` : '保存了草稿';
+        addAuditLog('form_saved', 'form', changeDesc);
+      },
+
+      submitFormForReview: (data: Partial<ResignationForm>) => {
+        const { resignationForm, addAuditLog } = get();
+        if (!resignationForm) return;
+
+        set({
+          resignationForm: {
+            ...resignationForm,
+            ...data,
+            status: 'pending',
+            updatedAt: formatISO(new Date())
+          }
+        });
+
+        addAuditLog('form_submitted', 'form', '离职申请已提交，等待主管审核');
+      },
+
+      updateSupervisorNotes: (notes: string) => {
+        const { resignationForm, addAuditLog } = get();
+        if (!resignationForm) return;
+
+        set({
+          resignationForm: {
+            ...resignationForm,
+            supervisorNotes: notes,
+            updatedAt: formatISO(new Date())
+          }
+        });
+
+        addAuditLog('supervisor_notes_updated', 'form', `主管更新了审核意见：${notes || '（无内容）'}`);
+      },
+
+      signOffNode: (role: Role, notes?: string) => {
+        const { signOffNodes, currentUser, addAuditLog } = get();
+        const now = formatISO(new Date());
+        const roleLabels: Record<Role, string> = {
+          employee: '离职员工',
+          supervisor: '部门主管',
+          it: 'IT管理员',
+          admin: '行政人员',
+          finance: '财务专员',
+          hr: 'HR管理员'
+        };
+
+        const updatedNodes = signOffNodes.map(node => {
+          if (node.role === role && !node.signedOff) {
+            return {
+              ...node,
+              signedOff: true,
+              signedOffBy: currentUser.id,
+              signedOffAt: now,
+              notes: notes || node.notes
+            };
+          }
+          return node;
+        });
+
+        set({ signOffNodes: updatedNodes });
+        addAuditLog('signoff_completed', 'signoff', `${roleLabels[role]}已完成签收确认${notes ? `，备注：${notes}` : ''}`);
+      },
+
+      updateChecklistItem: (id: string, data: Partial<ArchiveChecklistItem>) => {
+        const { archiveChecklist, currentUser, addAuditLog } = get();
+        const now = formatISO(new Date());
+        const item = archiveChecklist.find(i => i.id === id);
+
+        const updatedItems = archiveChecklist.map(i => {
+          if (i.id === id) {
+            const updates = { ...i, ...data };
+            if (data.checked && !i.checked) {
+              updates.checkedBy = currentUser.id;
+              updates.checkedAt = now;
+            }
+            return updates;
+          }
+          return i;
+        });
+
+        set({ archiveChecklist: updatedItems });
+
+        if (data.checked !== undefined && item) {
+          const statusText = data.checked ? '已核验通过' : '取消核验';
+          const notesText = data.notes ? `，备注：${data.notes}` : '';
+          addAuditLog('checklist_updated', 'checklist', `核验项"${item.title}"${statusText}${notesText}`, [id]);
+        }
+      },
+
+      getUnsignedOffRoles: () => {
+        const state = get();
+        return state.signOffNodes
+          .filter(n => !n.signedOff)
+          .map(n => n.role);
+      },
+
+      isAllSignedOff: () => {
+        const state = get();
+        return state.signOffNodes.length > 0 && state.signOffNodes.every(n => n.signedOff);
+      },
+
+      getChecklistProgress: () => {
+        const state = get();
+        const total = state.archiveChecklist.length;
+        const completed = state.archiveChecklist.filter(i => i.checked).length;
+        return { completed, total };
+      },
+
       isAllCompleted: () => {
         const state = get();
 
@@ -588,6 +733,8 @@ export const useStore = create<StoreState>()(
         comments: state.comments,
         attachments: state.attachments,
         auditLogs: state.auditLogs,
+        signOffNodes: state.signOffNodes,
+        archiveChecklist: state.archiveChecklist,
         currentRole: state.currentRole,
         settlementConfirmed: state.settlementConfirmed
       })

@@ -12,7 +12,8 @@ import {
   FileText,
   AlertCircle,
   Clock,
-  CheckCircle2
+  CheckCircle2,
+  Send
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import StatusBadge from '@/components/StatusBadge';
@@ -42,6 +43,9 @@ export default function ResignationFormPage() {
     employees,
     currentUser,
     updateResignationForm,
+    saveFormDraft,
+    submitFormForReview,
+    updateSupervisorNotes,
   } = useStore();
 
   const [form, setForm] = useState<Partial<ResignationFormType>>({
@@ -104,23 +108,30 @@ export default function ResignationFormPage() {
     setTodos(todos.filter(t => t.id !== id));
   };
 
+  const buildFormData = () => ({
+    reason: form.reason,
+    lastWorkingDay: form.lastWorkingDay,
+    handoverPersonId: form.handoverPersonId,
+    employeeTodos: todos.map(t => t.text),
+    supervisorNotes: form.supervisorNotes,
+  });
+
   const handleSave = () => {
     if (!resignationForm) return;
-    updateResignationForm({
-      reason: form.reason,
-      lastWorkingDay: form.lastWorkingDay,
-      handoverPersonId: form.handoverPersonId,
-      employeeTodos: todos.map(t => t.text),
-      supervisorNotes: form.supervisorNotes,
-    });
+    const data = buildFormData();
+    saveFormDraft(data);
+  };
+
+  const handleSubmit = () => {
+    if (!resignationForm) return;
+    const data = buildFormData();
+    submitFormForReview(data);
   };
 
   const handleSupervisorConfirm = () => {
     if (!resignationForm) return;
-    updateResignationForm({
-      status: 'in_progress',
-      supervisorNotes: form.supervisorNotes,
-    });
+    updateSupervisorNotes(form.supervisorNotes || '');
+    updateResignationForm({ status: 'in_progress' });
   };
 
   if (!resignationForm || !employee) {
@@ -141,12 +152,23 @@ export default function ResignationFormPage() {
             <StatusBadge status={resignationForm.status} type="form" />
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={handleSave}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              保存草稿
-            </button>
+            {!isSupervisor && (
+              <>
+                <button
+                  onClick={handleSave}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  保存草稿
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1.5"
+                >
+                  <Send className="w-4 h-4" />
+                  提交审核
+                </button>
+              </>
+            )}
             {isSupervisor && resignationForm.status === 'pending' && (
               <button
                 onClick={handleSupervisorConfirm}

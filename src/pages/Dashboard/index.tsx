@@ -23,7 +23,7 @@ import ProgressBar from '@/components/ProgressBar';
 import Timeline from '@/components/Timeline';
 import { cn } from '@/lib/utils';
 import { formatDate, isOverdue } from '@/utils/date';
-import type { HandoverTask, AssetItem, PermissionItem, SettlementItem } from '@/types';
+import type { HandoverTask, AssetItem, PermissionItem, SettlementItem, SignOffNode } from '@/types';
 
 interface TodoItem {
   id: string;
@@ -63,6 +63,15 @@ const priorityColors: Record<string, string> = {
   low: 'bg-gray-100 text-gray-600 border-gray-200'
 };
 
+const signOffRoleLabels: Record<string, string> = {
+  employee: '离职员工',
+  supervisor: '部门主管',
+  it: 'IT管理员',
+  admin: '行政人员',
+  finance: '财务专员',
+  hr: 'HR管理员'
+};
+
 export default function DashboardPage() {
   const navigate = useNavigate();
   const {
@@ -75,11 +84,16 @@ export default function DashboardPage() {
     employees,
     auditLogs,
     getOverallProgress,
-    isAllCompleted
+    isAllCompleted,
+    signOffNodes,
+    getUnsignedOffRoles,
+    isAllSignedOff
   } = useStore();
 
   const overallProgress = getOverallProgress();
   const allCompleted = isAllCompleted();
+  const unsignedOffRoles = getUnsignedOffRoles();
+  const allSignedOff = isAllSignedOff();
 
   const stats = useMemo(() => {
     const pendingTasks = handoverTasks.filter(t => t.status !== 'completed').length;
@@ -320,6 +334,8 @@ export default function DashboardPage() {
 
   const getEmployee = (id: string) => employees.find(e => e.id === id);
 
+  const getSignOffNode = (role: string) => signOffNodes.find(n => n.role === role);
+
   const commentCategoryLabels: Record<string, string> = {
     general: '综合',
     task: '任务',
@@ -383,6 +399,8 @@ export default function DashboardPage() {
     hr: 'HR管理员'
   };
 
+  const signOffRoles: Array<'employee' | 'supervisor' | 'it' | 'admin' | 'finance' | 'hr'> = ['employee', 'supervisor', 'it', 'admin', 'finance', 'hr'];
+
   return (
     <div className="flex flex-col h-full bg-gray-50">
       <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
@@ -445,6 +463,71 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+              <UserCheck className="w-5 h-5 text-gray-500" />
+              多角色签收状态
+            </h3>
+            {!allSignedOff && unsignedOffRoles.length > 0 && (
+              <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded">
+                还剩 {unsignedOffRoles.length} 人未签收
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {signOffRoles.map((role) => {
+              const node = getSignOffNode(role);
+              const signer = node?.signedOffBy ? getEmployee(node.signedOffBy) : null;
+              const isSigned = node?.signedOff;
+
+              return (
+                <div
+                  key={role}
+                  className={cn(
+                    'rounded-lg border p-3 transition-all',
+                    isSigned
+                      ? 'bg-green-50 border-green-200'
+                      : 'bg-gray-50 border-gray-200'
+                  )}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    {isSigned ? (
+                      <CheckCircle2 className="w-4 h-4 text-green-600" />
+                    ) : (
+                      <Clock className="w-4 h-4 text-gray-400" />
+                    )}
+                    <span className={cn(
+                      'text-sm font-medium',
+                      isSigned ? 'text-green-700' : 'text-gray-600'
+                    )}>
+                      {signOffRoleLabels[role]}
+                    </span>
+                  </div>
+                  <div className="text-xs mb-1">
+                    {isSigned && signer ? (
+                      <span className="text-gray-700">{signer.name}</span>
+                    ) : (
+                      <span className="text-gray-400">待签收</span>
+                    )}
+                  </div>
+                  <div className={cn(
+                    'text-xs font-medium',
+                    isSigned ? 'text-green-600' : 'text-gray-400'
+                  )}>
+                    {isSigned ? '已签收' : '待签收'}
+                  </div>
+                  {isSigned && node?.signedOffAt && (
+                    <div className="text-[10px] text-gray-500 mt-1">
+                      {formatDate(node.signedOffAt, 'MM-dd HH:mm')}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
             <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
@@ -495,6 +578,16 @@ export default function DashboardPage() {
                 </h3>
                 <span className="text-xs text-gray-500">共 {todoItems.length} 项待处理</span>
               </div>
+              {!allSignedOff && unsignedOffRoles.length > 0 && (
+                <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-amber-800">
+                      以下角色尚未完成签收：{unsignedOffRoles.map(r => signOffRoleLabels[r]).join('、')}
+                    </p>
+                  </div>
+                </div>
+              )}
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {todoItems.length === 0 ? (
                   <div className="py-8 text-center">

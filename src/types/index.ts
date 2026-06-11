@@ -92,12 +92,37 @@ export interface Attachment {
 export interface AuditLog {
   id: string;
   formId: string;
-  action: 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation';
+  action: 'form_saved' | 'form_submitted' | 'supervisor_approved' | 'supervisor_notes_updated' | 'task_completed' | 'asset_returned' | 'permission_closed' | 'settlement_confirmed' | 'hr_archived' | 'comment_added' | 'attachment_uploaded' | 'batch_operation' | 'signoff_completed' | 'checklist_updated';
   operatorId: string;
   operatorName: string;
   operatorRole: string;
   timestamp: string;
   details: string;
-  module: 'general' | 'task' | 'asset' | 'permission' | 'settlement' | 'form' | 'archive';
+  module: 'general' | 'task' | 'asset' | 'permission' | 'settlement' | 'form' | 'archive' | 'signoff' | 'checklist';
   affectedItems?: string[];
+}
+
+export type SignOffRole = 'employee' | 'supervisor' | 'it' | 'admin' | 'finance' | 'hr';
+
+export interface SignOffNode {
+  id: string;
+  formId: string;
+  role: SignOffRole;
+  title: string;
+  description: string;
+  signedOff: boolean;
+  signedOffBy?: string;
+  signedOffAt?: string;
+  notes?: string;
+}
+
+export interface ArchiveChecklistItem {
+  id: string;
+  formId: string;
+  category: 'document' | 'asset' | 'finance' | 'system' | 'hr';
+  title: string;
+  checked: boolean;
+  checkedBy?: string;
+  checkedAt?: string;
+  notes?: string;
 }

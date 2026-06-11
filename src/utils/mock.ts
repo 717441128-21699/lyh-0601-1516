@@ -7,6 +7,8 @@ import {
   SettlementItem,
   Comment,
   Attachment,
+  SignOffNode,
+  ArchiveChecklistItem,
 } from '../types';
 import { getCurrentTime } from './date';
 import { addDays, formatISO } from 'date-fns';
@@ -463,6 +465,184 @@ export function generateMockAttachments(formId: string): Attachment[] {
       size: 153600,
       uploadedAt: formatISO(addDays(now, -1)),
       uploadedBy: 'emp-005',
+    },
+  ];
+}
+
+export function generateMockSignOffNodes(formId: string): SignOffNode[] {
+  const now = new Date();
+  return [
+    {
+      id: 'signoff-' + generateId(),
+      formId,
+      role: 'employee',
+      title: '离职员工确认',
+      description: '确认已完成个人待办事项并开始交接',
+      signedOff: true,
+      signedOffBy: 'emp-001',
+      signedOffAt: formatISO(addDays(now, -5)).split('T')[0],
+    },
+    {
+      id: 'signoff-' + generateId(),
+      formId,
+      role: 'supervisor',
+      title: '部门主管确认',
+      description: '确认工作交接完整，项目文档齐全',
+      signedOff: true,
+      signedOffBy: 'emp-002',
+      signedOffAt: formatISO(addDays(now, -3)).split('T')[0],
+      notes: '所有核心项目已完成交接，代码已归档',
+    },
+    {
+      id: 'signoff-' + generateId(),
+      formId,
+      role: 'it',
+      title: 'IT管理员确认',
+      description: '确认所有设备归还、权限关闭',
+      signedOff: false,
+    },
+    {
+      id: 'signoff-' + generateId(),
+      formId,
+      role: 'admin',
+      title: '行政人员确认',
+      description: '确认门禁卡、工牌等物品归还',
+      signedOff: false,
+    },
+    {
+      id: 'signoff-' + generateId(),
+      formId,
+      role: 'finance',
+      title: '财务专员确认',
+      description: '确认借款结清、报销处理完毕、薪资核算完成',
+      signedOff: false,
+    },
+    {
+      id: 'signoff-' + generateId(),
+      formId,
+      role: 'hr',
+      title: 'HR确认',
+      description: '确认所有流程完成，准备最终归档',
+      signedOff: false,
+    },
+  ];
+}
+
+export function generateMockArchiveChecklist(formId: string): ArchiveChecklistItem[] {
+  const now = new Date();
+  return [
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'document',
+      title: '离职申请书签字确认',
+      checked: true,
+      checkedBy: 'emp-003',
+      checkedAt: formatISO(addDays(now, -5)).split('T')[0],
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'document',
+      title: '项目交接文档完整',
+      checked: true,
+      checkedBy: 'emp-002',
+      checkedAt: formatISO(addDays(now, -3)).split('T')[0],
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'document',
+      title: '知识库内容已移交',
+      checked: false,
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'asset',
+      title: '笔记本电脑已归还',
+      checked: false,
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'asset',
+      title: '显示器及外设已归还',
+      checked: false,
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'asset',
+      title: '工牌/门禁卡已收回',
+      checked: false,
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'finance',
+      title: '借款已结清',
+      checked: true,
+      checkedBy: 'emp-005',
+      checkedAt: formatISO(addDays(now, -3)).split('T')[0],
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'finance',
+      title: '报销单已处理',
+      checked: false,
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'finance',
+      title: '薪资及补偿已核算',
+      checked: false,
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'system',
+      title: '企业邮箱已停用/转交',
+      checked: false,
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'system',
+      title: '系统账号已关闭',
+      checked: false,
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'system',
+      title: '代码仓库权限已移除',
+      checked: true,
+      checkedBy: 'emp-004',
+      checkedAt: formatISO(addDays(now, -1)).split('T')[0],
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'hr',
+      title: '劳动合同已解除',
+      checked: false,
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'hr',
+      title: '社保公积金已停缴',
+      checked: false,
+    },
+    {
+      id: 'checklist-' + generateId(),
+      formId,
+      category: 'hr',
+      title: '离职证明已开具',
+      checked: false,
     },
   ];
 }

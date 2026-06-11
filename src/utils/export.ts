@@ -10,7 +10,9 @@ import type {
   SettlementItem,
   Comment,
   Attachment,
-  AuditLog
+  AuditLog,
+  SignOffNode,
+  ArchiveChecklistItem
 } from '../types';
 import { formatDate } from './date';
 
@@ -25,6 +27,8 @@ interface StoreState {
   comments: Comment[];
   attachments: Attachment[];
   auditLogs: AuditLog[];
+  signOffNodes: SignOffNode[];
+  archiveChecklist: ArchiveChecklistItem[];
 }
 
 export async function exportToPDF(elementId: string, filename: string): Promise<void> {
@@ -85,117 +89,213 @@ export function exportCompletePackage(store: StoreState): void {
     }];
     const formSheet = XLSX.utils.json_to_sheet(formData);
     XLSX.utils.book_append_sheet(workbook, formSheet, '离职单');
+  } else {
+    const emptyHeaders = [{
+      '员工姓名': '',
+      '员工部门': '',
+      '员工职位': '',
+      '员工邮箱': '',
+      '离职原因': '',
+      '最后工作日': '',
+      '交接人': '',
+      '直属上级': '',
+      '当前状态': '',
+      '员工待办事项': '',
+      '上级备注': '',
+      '创建时间': '',
+      '更新时间': '',
+    }];
+    const formSheet = XLSX.utils.json_to_sheet(emptyHeaders);
+    XLSX.utils.book_append_sheet(workbook, formSheet, '离职单');
   }
 
-  if (store.handoverTasks.length > 0) {
-    const taskData = store.handoverTasks.map(task => {
-      const assignee = store.employees.find(e => e.id === task.assigneeId);
-      return {
-        '任务标题': task.title,
-        '任务描述': task.description,
-        '任务分类': getCategoryText(task.category),
-        '负责人': assignee?.name || '',
-        '优先级': getPriorityText(task.priority),
-        '状态': getTaskStatusText(task.status),
-        '截止日期': formatDate(task.dueDate, 'yyyy-MM-dd'),
-        '完成时间': task.completedAt ? formatDate(task.completedAt, 'yyyy-MM-dd HH:mm') : '',
-      };
-    });
-    const taskSheet = XLSX.utils.json_to_sheet(taskData);
-    XLSX.utils.book_append_sheet(workbook, taskSheet, '交接任务');
-  }
+  const taskData = store.handoverTasks.map(task => {
+    const assignee = store.employees.find(e => e.id === task.assigneeId);
+    return {
+      '任务标题': task.title,
+      '任务描述': task.description,
+      '任务分类': getCategoryText(task.category),
+      '负责人': assignee?.name || '',
+      '优先级': getPriorityText(task.priority),
+      '状态': getTaskStatusText(task.status),
+      '截止日期': formatDate(task.dueDate, 'yyyy-MM-dd'),
+      '完成时间': task.completedAt ? formatDate(task.completedAt, 'yyyy-MM-dd HH:mm') : '',
+    };
+  });
+  const taskSheet = XLSX.utils.json_to_sheet(taskData.length > 0 ? taskData : [{
+    '任务标题': '',
+    '任务描述': '',
+    '任务分类': '',
+    '负责人': '',
+    '优先级': '',
+    '状态': '',
+    '截止日期': '',
+    '完成时间': '',
+  }]);
+  XLSX.utils.book_append_sheet(workbook, taskSheet, '交接任务');
 
-  if (store.assetItems.length > 0) {
-    const assetData = store.assetItems.map(item => {
-      const returnedBy = item.returnedBy ? store.employees.find(e => e.id === item.returnedBy) : null;
-      return {
-        '资产分类': item.category === 'it' ? 'IT资产' : '行政物品',
-        '资产名称': item.name,
-        '资产编号': item.serialNumber,
-        '状态': getAssetStatusText(item.status),
-        '归还时间': item.returnedAt ? formatDate(item.returnedAt, 'yyyy-MM-dd HH:mm') : '',
-        '确认人': returnedBy?.name || '',
-        '备注': item.notes || '',
-      };
-    });
-    const assetSheet = XLSX.utils.json_to_sheet(assetData);
-    XLSX.utils.book_append_sheet(workbook, assetSheet, '资产归还');
-  }
+  const assetData = store.assetItems.map(item => {
+    const returnedBy = item.returnedBy ? store.employees.find(e => e.id === item.returnedBy) : null;
+    return {
+      '资产分类': item.category === 'it' ? 'IT资产' : '行政物品',
+      '资产名称': item.name,
+      '资产编号': item.serialNumber,
+      '状态': getAssetStatusText(item.status),
+      '归还时间': item.returnedAt ? formatDate(item.returnedAt, 'yyyy-MM-dd HH:mm') : '',
+      '确认人': returnedBy?.name || '',
+      '备注': item.notes || '',
+    };
+  });
+  const assetSheet = XLSX.utils.json_to_sheet(assetData.length > 0 ? assetData : [{
+    '资产分类': '',
+    '资产名称': '',
+    '资产编号': '',
+    '状态': '',
+    '归还时间': '',
+    '确认人': '',
+    '备注': '',
+  }]);
+  XLSX.utils.book_append_sheet(workbook, assetSheet, '资产归还');
 
-  if (store.permissionItems.length > 0) {
-    const permissionData = store.permissionItems.map(item => {
-      const closedBy = item.closedBy ? store.employees.find(e => e.id === item.closedBy) : null;
-      return {
-        '权限类型': getPermissionTypeText(item.type),
-        '权限名称': item.name,
-        '状态': item.closed ? '已关闭' : '未关闭',
-        '关闭时间': item.closedAt ? formatDate(item.closedAt, 'yyyy-MM-dd HH:mm') : '',
-        '操作人': closedBy?.name || '',
-        '备注': item.notes || '',
-      };
-    });
-    const permissionSheet = XLSX.utils.json_to_sheet(permissionData);
-    XLSX.utils.book_append_sheet(workbook, permissionSheet, '权限关闭');
-  }
+  const permissionData = store.permissionItems.map(item => {
+    const closedBy = item.closedBy ? store.employees.find(e => e.id === item.closedBy) : null;
+    return {
+      '权限类型': getPermissionTypeText(item.type),
+      '权限名称': item.name,
+      '状态': item.closed ? '已关闭' : '未关闭',
+      '关闭时间': item.closedAt ? formatDate(item.closedAt, 'yyyy-MM-dd HH:mm') : '',
+      '操作人': closedBy?.name || '',
+      '备注': item.notes || '',
+    };
+  });
+  const permissionSheet = XLSX.utils.json_to_sheet(permissionData.length > 0 ? permissionData : [{
+    '权限类型': '',
+    '权限名称': '',
+    '状态': '',
+    '关闭时间': '',
+    '操作人': '',
+    '备注': '',
+  }]);
+  XLSX.utils.book_append_sheet(workbook, permissionSheet, '权限关闭');
 
-  if (store.settlementItems.length > 0) {
-    const settlementData = store.settlementItems.map(item => {
-      const confirmedBy = item.confirmedBy ? store.employees.find(e => e.id === item.confirmedBy) : null;
-      return {
-        '结算类型': getSettlementTypeText(item.type),
-        '描述': item.description,
-        '金额': item.amount,
-        '状态': getSettlementStatusText(item.status),
-        '确认时间': item.confirmedAt ? formatDate(item.confirmedAt, 'yyyy-MM-dd HH:mm') : '',
-        '确认人': confirmedBy?.name || '',
-      };
-    });
-    const settlementSheet = XLSX.utils.json_to_sheet(settlementData);
-    XLSX.utils.book_append_sheet(workbook, settlementSheet, '财务结算');
-  }
+  const settlementData = store.settlementItems.map(item => {
+    const confirmedBy = item.confirmedBy ? store.employees.find(e => e.id === item.confirmedBy) : null;
+    return {
+      '结算类型': getSettlementTypeText(item.type),
+      '描述': item.description,
+      '金额': item.amount,
+      '状态': getSettlementStatusText(item.status),
+      '确认时间': item.confirmedAt ? formatDate(item.confirmedAt, 'yyyy-MM-dd HH:mm') : '',
+      '确认人': confirmedBy?.name || '',
+    };
+  });
+  const settlementSheet = XLSX.utils.json_to_sheet(settlementData.length > 0 ? settlementData : [{
+    '结算类型': '',
+    '描述': '',
+    '金额': '',
+    '状态': '',
+    '确认时间': '',
+    '确认人': '',
+  }]);
+  XLSX.utils.book_append_sheet(workbook, settlementSheet, '财务结算');
 
-  if (store.attachments.length > 0) {
-    const attachmentData = store.attachments.map(item => {
-      const uploadedBy = store.employees.find(e => e.id === item.uploadedBy);
-      return {
-        '文件名': item.name,
-        '文件类型': item.type,
-        '文件大小(KB)': Math.round(item.size / 1024),
-        '上传人': uploadedBy?.name || '',
-        '上传时间': formatDate(item.uploadedAt, 'yyyy-MM-dd HH:mm'),
-      };
-    });
-    const attachmentSheet = XLSX.utils.json_to_sheet(attachmentData);
-    XLSX.utils.book_append_sheet(workbook, attachmentSheet, '附件清单');
-  }
+  const attachmentData = store.attachments.map(item => {
+    const uploadedBy = store.employees.find(e => e.id === item.uploadedBy);
+    return {
+      '文件名': item.name,
+      '文件类型': item.type,
+      '文件大小(KB)': Math.round(item.size / 1024),
+      '上传人': uploadedBy?.name || '',
+      '上传时间': formatDate(item.uploadedAt, 'yyyy-MM-dd HH:mm'),
+    };
+  });
+  const attachmentSheet = XLSX.utils.json_to_sheet(attachmentData.length > 0 ? attachmentData : [{
+    '文件名': '',
+    '文件类型': '',
+    '文件大小(KB)': '',
+    '上传人': '',
+    '上传时间': '',
+  }]);
+  XLSX.utils.book_append_sheet(workbook, attachmentSheet, '附件清单');
 
-  if (store.auditLogs.length > 0) {
-    const logData = store.auditLogs.map(log => ({
-      '操作时间': formatDate(log.timestamp, 'yyyy-MM-dd HH:mm:ss'),
-      '操作人': log.operatorName,
-      '操作人角色': getRoleText(log.operatorRole),
-      '操作类型': getActionText(log.action),
-      '所属模块': getModuleText(log.module),
-      '详情': log.details,
-      '影响项': log.affectedItems?.join('；') || '',
-    }));
-    const logSheet = XLSX.utils.json_to_sheet(logData);
-    XLSX.utils.book_append_sheet(workbook, logSheet, '流程记录');
-  }
+  const logData = store.auditLogs.map(log => ({
+    '操作时间': formatDate(log.timestamp, 'yyyy-MM-dd HH:mm:ss'),
+    '操作人': log.operatorName,
+    '操作人角色': getRoleText(log.operatorRole),
+    '操作类型': getActionText(log.action),
+    '所属模块': getModuleText(log.module),
+    '详情': log.details,
+    '影响项': log.affectedItems?.join('；') || '',
+  }));
+  const logSheet = XLSX.utils.json_to_sheet(logData.length > 0 ? logData : [{
+    '操作时间': '',
+    '操作人': '',
+    '操作人角色': '',
+    '操作类型': '',
+    '所属模块': '',
+    '详情': '',
+    '影响项': '',
+  }]);
+  XLSX.utils.book_append_sheet(workbook, logSheet, '流程记录');
 
-  if (store.comments.length > 0) {
-    const commentData = store.comments.map(comment => {
-      const author = store.employees.find(e => e.id === comment.authorId);
-      return {
-        '时间': formatDate(comment.createdAt, 'yyyy-MM-dd HH:mm'),
-        '发表人': author?.name || '',
-        '所属模块': getModuleText(comment.category),
-        '内容': comment.content,
-      };
-    });
-    const commentSheet = XLSX.utils.json_to_sheet(commentData);
-    XLSX.utils.book_append_sheet(workbook, commentSheet, '意见留痕');
-  }
+  const commentData = store.comments.map(comment => {
+    const author = store.employees.find(e => e.id === comment.authorId);
+    return {
+      '时间': formatDate(comment.createdAt, 'yyyy-MM-dd HH:mm'),
+      '发表人': author?.name || '',
+      '所属模块': getModuleText(comment.category),
+      '内容': comment.content,
+    };
+  });
+  const commentSheet = XLSX.utils.json_to_sheet(commentData.length > 0 ? commentData : [{
+    '时间': '',
+    '发表人': '',
+    '所属模块': '',
+    '内容': '',
+  }]);
+  XLSX.utils.book_append_sheet(workbook, commentSheet, '意见留痕');
+
+  const signOffData = store.signOffNodes.map(node => {
+    const signedOffBy = node.signedOffBy ? store.employees.find(e => e.id === node.signedOffBy) : null;
+    return {
+      '角色': getSignOffRoleText(node.role),
+      '节点名称': node.title,
+      '是否签收': node.signedOff ? '是' : '否',
+      '签收人': signedOffBy?.name || '',
+      '签收时间': node.signedOffAt ? formatDate(node.signedOffAt, 'yyyy-MM-dd HH:mm') : '',
+      '备注': node.notes || '',
+    };
+  });
+  const signOffSheet = XLSX.utils.json_to_sheet(signOffData.length > 0 ? signOffData : [{
+    '角色': '',
+    '节点名称': '',
+    '是否签收': '',
+    '签收人': '',
+    '签收时间': '',
+    '备注': '',
+  }]);
+  XLSX.utils.book_append_sheet(workbook, signOffSheet, '多角色签收');
+
+  const checklistData = store.archiveChecklist.map(item => {
+    const checkedBy = item.checkedBy ? store.employees.find(e => e.id === item.checkedBy) : null;
+    return {
+      '分类': getChecklistCategoryText(item.category),
+      '核验项': item.title,
+      '是否核验': item.checked ? '是' : '否',
+      '核验人': checkedBy?.name || '',
+      '核验时间': item.checkedAt ? formatDate(item.checkedAt, 'yyyy-MM-dd HH:mm') : '',
+      '备注': item.notes || '',
+    };
+  });
+  const checklistSheet = XLSX.utils.json_to_sheet(checklistData.length > 0 ? checklistData : [{
+    '分类': '',
+    '核验项': '',
+    '是否核验': '',
+    '核验人': '',
+    '核验时间': '',
+    '备注': '',
+  }]);
+  XLSX.utils.book_append_sheet(workbook, checklistSheet, '归档核验清单');
 
   XLSX.writeFile(workbook, `${employeeName}_离职交接完整档案_${timestamp}.xlsx`);
 }
@@ -324,4 +424,27 @@ function getModuleText(module: string): string {
     archive: '归档管理',
   };
   return map[module] || module;
+}
+
+function getSignOffRoleText(role: string): string {
+  const map: Record<string, string> = {
+    employee: '离职员工',
+    supervisor: '直属上级',
+    it: 'IT管理员',
+    admin: '行政人员',
+    finance: '财务人员',
+    hr: 'HR管理员',
+  };
+  return map[role] || role;
+}
+
+function getChecklistCategoryText(category: string): string {
+  const map: Record<string, string> = {
+    document: '文档资料',
+    asset: '资产物资',
+    finance: '财务结算',
+    system: '系统权限',
+    hr: '人事手续',
+  };
+  return map[category] || category;
 }
